@@ -1,0 +1,6 @@
+{
+  "name": "EstateVolt - Property & Utility Billing Manager",
+  "description": "Multi-building property management system for apartment complexes. Track tenant leases, monthly electricity meter readings with automated billing, rent collection, balance carryovers, and maintenance requests.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

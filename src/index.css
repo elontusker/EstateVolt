@@ -1,0 +1,197 @@
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap");
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --color-brand-blue: #5680e9;
+  --color-brand-sky: #84ceeb;
+  --color-brand-cyan: #5ab9ea;
+  --color-brand-lavender: #c1c8e4;
+  --color-brand-purple: #8860d0;
+  --color-sidebar: #e64833;
+  --color-brand-primary: color-mix(in srgb, var(--color-brand-blue) 72%, black);
+  --color-brand-primary-hover: color-mix(in srgb, var(--color-brand-purple) 72%, black);
+  --color-brand-accent: var(--color-brand-cyan);
+  --color-brand-accent-muted: var(--color-brand-sky);
+  --color-brand-tab: var(--color-brand-purple);
+  --color-brand-tab-active: color-mix(in srgb, var(--color-brand-purple) 68%, black);
+  --color-brand-muted: color-mix(in srgb, var(--color-brand-purple) 55%, black);
+  --color-brand-border: color-mix(in srgb, var(--color-brand-blue) 60%, var(--color-brand-purple));
+  --color-brand-surface: var(--color-brand-lavender);
+  --color-brand-tint: color-mix(in srgb, var(--color-brand-sky) 62%, var(--color-brand-lavender));
+  --color-brand-canvas: color-mix(in srgb, var(--color-brand-lavender) 72%, var(--color-brand-blue));
+}
+
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  html {
+    background: var(--color-brand-canvas);
+    scroll-behavior: smooth;
+  }
+
+  body {
+    min-width: 320px;
+    min-height: 100vh;
+    margin: 0;
+    background:
+      radial-gradient(circle at 10% -8%, color-mix(in srgb, var(--color-brand-sky) 34%, transparent), transparent 30rem),
+      radial-gradient(circle at 92% 4%, color-mix(in srgb, var(--color-brand-purple) 20%, transparent), transparent 28rem),
+      linear-gradient(180deg, var(--color-brand-canvas) 0%, var(--color-brand-tint) 100%);
+    color: var(--color-brand-tab-active);
+    font-family: "Plus Jakarta Sans", system-ui, sans-serif;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+  }
+
+  button,
+  a,
+  select,
+  input[type="month"],
+  input[type="date"] {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  button:focus-visible,
+  a:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--color-brand-accent) 80%, transparent);
+    outline-offset: 2px;
+  }
+
+  input::placeholder,
+  textarea::placeholder {
+    color: var(--color-brand-muted);
+  }
+
+  ::selection {
+    background: color-mix(in srgb, var(--color-brand-accent) 20%, transparent);
+    color: var(--color-brand-tab-active);
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-brand-border) transparent;
+  }
+
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background: var(--color-brand-border);
+    background-clip: padding-box;
+  }
+
+  .font-mono,
+  .tabular-nums {
+    font-family: "JetBrains Mono", monospace;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@layer utilities {
+  .app-surface {
+    border: 1px solid color-mix(in srgb, var(--color-brand-border) 95%, transparent);
+    background: color-mix(in srgb, var(--color-brand-surface) 94%, transparent);
+    box-shadow:
+      0 1px 0 color-mix(in srgb, var(--color-brand-accent-muted) 35%, transparent) inset,
+      0 12px 32px color-mix(in srgb, var(--color-brand-tab-active) 6.5%, transparent);
+  }
+
+  .app-grid {
+    background-image:
+      linear-gradient(to right, color-mix(in srgb, var(--color-brand-accent) 3.2%, transparent) 1px, transparent 1px),
+      linear-gradient(to bottom, color-mix(in srgb, var(--color-brand-accent) 3.2%, transparent) 1px, transparent 1px);
+    background-size: 48px 48px;
+  }
+
+  .page-enter {
+    animation: page-enter 240ms ease-out both;
+  }
+
+  .hide-scrollbar {
+    scrollbar-width: none;
+  }
+
+  .hide-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@keyframes page-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media print {
+  /* Hide non-printable elements */
+  nav, aside, header, .no-print, button, .action-bar {
+    display: none !important;
+  }
+
+  body {
+    background: white !important;
+    color: black !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  .print-only-container {
+    display: block !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    box-shadow: none !important;
+    border: none !important;
+    padding: 0 !important;
+  }
+
+  .printable-card {
+    border: 1px solid #e5e7eb !important;
+    page-break-inside: avoid;
+    box-shadow: none !important;
+    color: #111827 !important;
+    background-color: #ffffff !important;
+  }
+}
