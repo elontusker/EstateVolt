@@ -2,7 +2,6 @@ import React, { useRef, useEffect, useState, useMemo } from 'react';
 import * as d3 from 'd3';
 import { useProperty } from '../context/PropertyContext';
 import { 
-  TrendingUp, 
   BarChart3, 
   PieChart as PieIcon, 
   Layers, 
@@ -13,15 +12,18 @@ import {
   Receipt,
   Wallet
 } from 'lucide-react';
+import { Button } from './ui/Primitives';
 
-export type ChartMode = 'cashflow' | 'revenue_split' | 'expense_breakdown';
+export type ChartMode = 'slicer' | 'cashflow' | 'revenue_split' | 'electricity_paid' | 'expense_breakdown';
+type ChartMetric = 'rent' | 'electricity' | 'electricityPaid' | 'expense';
 
 interface MonthlyFinancialSummary {
   month: string;           // '2026-05'
   monthLabel: string;      // 'May 2026'
   shortLabel: string;      // "May '26"
   rentRevenue: number;     // ₹ Rent collected
-  electricityRevenue: number; // ₹ Electricity payments
+  electricityRevenue: number; // ₹ Electricity received
+  electricityPaid: number; // ₹ Electricity utility expenses paid
   totalRevenue: number;    // ₹ Combined revenue
   totalExpense: number;    // ₹ Full building expenses
   netProfit: number;       // ₹ Revenue - Expenses
@@ -46,7 +48,13 @@ export const RevenueD3Chart: React.FC<RevenueD3ChartProps> = ({
   const svgRef = useRef<SVGSVGElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
-  const [chartMode, setChartMode] = useState<ChartMode>('cashflow');
+  const chartMode: ChartMode = 'slicer';
+  const [selectedMetrics, setSelectedMetrics] = useState<ChartMetric[]>([
+    'rent',
+    'electricity',
+    'electricityPaid',
+    'expense',
+  ]);
   const [activeTooltip, setActiveTooltip] = useState<{
     x: number;
     y: number;
@@ -101,12 +109,23 @@ export const RevenueD3Chart: React.FC<RevenueD3ChartProps> = ({
         totalKwh += s.totalReading;
         const totalBilled = s.baseRent + s.electricityAmount;
         const paidRatio = totalBilled > 0 ? (s.paymentReceived / totalBilled) : 0;
-        
-        rentRevenue += s.baseRent * paidRatio;
-        electricityRevenue += s.electricityAmount * paidRatio;
+
+        if (s.electricityReceived !== undefined) {
+          electricityRevenue += s.electricityReceived;
+          rentRevenue += Math.max(0, s.paymentReceived - s.electricityReceived);
+        } else {
+          rentRevenue += s.baseRent * paidRatio;
+          electricityRevenue += s.electricityAmount * paidRatio;
+        }
       });
 
       const totalRevenue = Number((rentRevenue + electricityRevenue).toFixed(2));
+      const electricityPaid = Number(
+        exps
+          .filter(expense => expense.category === 'ELECTRICITY_PAID')
+          .reduce((sum, expense) => sum + expense.amount, 0)
+          .toFixed(2),
+      );
       const totalExpense = Number(exps.reduce((sum, e) => sum + e.amount, 0).toFixed(2));
       const netProfit = Number((totalRevenue - totalExpense).toFixed(2));
       const profitMargin = totalRevenue > 0 ? (netProfit / totalRevenue) * 100 : 0;
@@ -117,6 +136,7 @@ export const RevenueD3Chart: React.FC<RevenueD3ChartProps> = ({
         shortLabel,
         rentRevenue: Math.round(rentRevenue),
         electricityRevenue: Math.round(electricityRevenue),
+        electricityPaid: Math.round(electricityPaid),
         totalRevenue: Math.round(totalRevenue),
         totalExpense: Math.round(totalExpense),
         netProfit: Math.round(netProfit),
@@ -125,18 +145,6 @@ export const RevenueD3Chart: React.FC<RevenueD3ChartProps> = ({
       };
     });
   }, [statements, buildingExpenses, effectiveBuildingId, months, collectionFilter]);
-
-  // Overall totals across months
-  const totals = useMemo(() => {
-    const totalRent = monthlyData.reduce((acc, m) => acc + m.rentRevenue, 0);
-    const totalElec = monthlyData.reduce((acc, m) => acc + m.electricityRevenue, 0);
-    const totalRev = monthlyData.reduce((acc, m) => acc + m.totalRevenue, 0);
-    const totalExp = monthlyData.reduce((acc, m) => acc + m.totalExpense, 0);
-    const totalProfit = totalRev - totalExp;
-    const avgMargin = totalRev > 0 ? (totalProfit / totalRev) * 100 : 0;
-
-    return { totalRent, totalElec, totalRev, totalExp, totalProfit, avgMargin };
-  }, [monthlyData]);
 
   // Category breakdown for current month expenses
   const categoryExpenses = useMemo(() => {
@@ -190,13 +198,18 @@ export const RevenueD3Chart: React.FC<RevenueD3ChartProps> = ({
 
     const elecGrad = defs.append('linearGradient').attr('id', 'elecGrad')
       .attr('x1', '0%').attr('y1', '0%').attr('x2', '0%').attr('y2', '100%');
-    elecGrad.append('stop').attr('offset', '0%').attr('stop-color', '#0ea5e9');
-    elecGrad.append('stop').attr('offset', '100%').attr('stop-color', '#0369a1');
+    elecGrad.append('stop').attr('offset', '0%').attr('stop-color', '#8b5cf6');
+    elecGrad.append('stop').attr('offset', '100%').attr('stop-color', '#6d28d9');
 
     const expGrad = defs.append('linearGradient').attr('id', 'expGrad')
       .attr('x1', '0%').attr('y1', '0%').attr('x2', '0%').attr('y2', '100%');
-    expGrad.append('stop').attr('offset', '0%').attr('stop-color', '#3b82f6');
-    expGrad.append('stop').attr('offset', '100%').attr('stop-color', '#1d4ed8');
+    expGrad.append('stop').attr('offset', '0%').attr('stop-color', '#ef4444');
+    expGrad.append('stop').attr('offset', '100%').attr('stop-color', '#b91c1c');
+
+    const elecPaidGrad = defs.append('linearGradient').attr('id', 'elecPaidGrad')
+      .attr('x1', '0%').attr('y1', '0%').attr('x2', '0%').attr('y2', '100%');
+    elecPaidGrad.append('stop').attr('offset', '0%').attr('stop-color', '#da70d6');
+    elecPaidGrad.append('stop').attr('offset', '100%').attr('stop-color', '#9932cc');
 
     const g = svg.append('g').attr('transform', `translate(${margin.left},${margin.top})`);
 
@@ -208,7 +221,114 @@ export const RevenueD3Chart: React.FC<RevenueD3ChartProps> = ({
       return `${currency}${(val / 1000).toFixed(0)}k`;
     };
 
-    if (chartMode === 'cashflow') {
+    if (chartMode === 'slicer') {
+      const metricConfig = {
+        rent: {
+          label: 'Rent Recv.',
+          color: 'url(#rentGrad)',
+          solid: '#10b981',
+          value: (item: MonthlyFinancialSummary) => item.rentRevenue,
+        },
+        electricity: {
+          label: 'Electricity Received',
+          color: 'url(#elecGrad)',
+          solid: '#7c3aed',
+          value: (item: MonthlyFinancialSummary) => item.electricityRevenue,
+        },
+        electricityPaid: {
+          label: 'Electricity Paid',
+          color: 'url(#elecPaidGrad)',
+          solid: '#ba55d3',
+          value: (item: MonthlyFinancialSummary) => item.electricityPaid,
+        },
+        expense: {
+          label: 'Expense',
+          color: 'url(#expGrad)',
+          solid: '#dc2626',
+          value: (item: MonthlyFinancialSummary) => item.totalExpense,
+        },
+      } satisfies Record<ChartMetric, {
+        label: string;
+        color: string;
+        solid: string;
+        value: (item: MonthlyFinancialSummary) => number;
+      }>;
+      const activeMetrics = selectedMetrics.map(metric => ({
+        key: metric,
+        ...metricConfig[metric],
+      }));
+      const x0 = d3.scaleBand()
+        .domain(monthlyData.map(item => item.shortLabel))
+        .rangeRound([0, width])
+        .padding(0.28);
+      const x1 = d3.scaleBand<ChartMetric>()
+        .domain(selectedMetrics)
+        .rangeRound([0, x0.bandwidth()])
+        .padding(0.12);
+      const maxValue = d3.max(
+        monthlyData,
+        item => d3.max(activeMetrics, metric => metric.value(item)) || 0,
+      ) || 100000;
+      const y = d3.scaleLinear()
+        .domain([0, maxValue * 1.15])
+        .nice()
+        .rangeRound([height, 0]);
+
+      g.append('g').attr('class', 'grid')
+        .call(d3.axisLeft(y).ticks(5).tickSize(-width).tickFormat(() => ''))
+        .selectAll('line')
+        .attr('stroke', 'rgba(148, 163, 184, 0.22)')
+        .attr('stroke-dasharray', '3 3');
+      g.selectAll('.grid .domain').remove();
+
+      const monthGroups = g.selectAll('g.metric-month')
+        .data(monthlyData)
+        .enter()
+        .append('g')
+        .attr('class', 'metric-month')
+        .attr('transform', item => `translate(${x0(item.shortLabel) || 0},0)`);
+
+      activeMetrics.forEach(metric => {
+        monthGroups.append('rect')
+          .attr('x', x1(metric.key) || 0)
+          .attr('y', height)
+          .attr('width', x1.bandwidth())
+          .attr('height', 0)
+          .attr('fill', metric.color)
+          .attr('rx', 2)
+          .attr('class', 'cursor-pointer hover:opacity-85')
+          .on('mouseenter', (event, item) => {
+            const [posX, posY] = d3.pointer(event, containerRef.current);
+            setActiveTooltip({
+              x: posX,
+              y: posY,
+              title: item.monthLabel,
+              items: [{
+                label: metric.label,
+                value: `${currency}${metric.value(item).toLocaleString('en-IN')}`,
+                color: metric.solid,
+              }],
+            });
+          })
+          .on('mouseleave', () => setActiveTooltip(null))
+          .transition()
+          .duration(500)
+          .ease(d3.easeCubicOut)
+          .attr('y', item => y(metric.value(item)))
+          .attr('height', item => height - y(metric.value(item)));
+      });
+
+      g.append('g')
+        .attr('transform', `translate(0,${height})`)
+        .call(d3.axisBottom(x0).tickSize(0).tickPadding(8))
+        .select('.domain')
+        .attr('stroke', 'rgba(148, 163, 184, 0.4)');
+      g.append('g')
+        .call(d3.axisLeft(y).ticks(5).tickSize(0).tickPadding(8).tickFormat(value => formatINR(value as number)))
+        .select('.domain')
+        .remove();
+      g.selectAll('.tick text').attr('class', 'text-xs font-mono fill-slate-500');
+    } else if (chartMode === 'cashflow') {
       // CASH FLOW: Monthly Revenue vs Building Expenses vs Net Profit
       const x0 = d3.scaleBand()
         .domain(monthlyData.map(d => d.shortLabel))
@@ -348,18 +468,22 @@ export const RevenueD3Chart: React.FC<RevenueD3ChartProps> = ({
       g.append('g').call(d3.axisLeft(y).ticks(5).tickSize(0).tickPadding(8).tickFormat(d => formatINR(d as number)))
         .select('.domain').remove();
 
-    } else if (chartMode === 'revenue_split') {
-      // REVENUE SPLIT: Stacked Rent (Emerald) + Electricity (Blue)
+    } else if (chartMode === 'revenue_split' || chartMode === 'electricity_paid') {
+      // Single-series tenant collection view
       const x0 = d3.scaleBand()
         .domain(monthlyData.map(d => d.shortLabel))
         .rangeRound([0, width])
         .padding(0.34);
 
-      const keys = ['rentRevenue', 'electricityRevenue'];
+      const isRentView = chartMode === 'revenue_split';
+      const keys = [isRentView ? 'rentRevenue' : 'electricityRevenue'];
       const stack = d3.stack<MonthlyFinancialSummary>().keys(keys);
       const series = stack(monthlyData);
 
-      const maxVal = d3.max(monthlyData, d => d.totalRevenue) || 1000000;
+      const maxVal = d3.max(
+        monthlyData,
+        d => isRentView ? d.rentRevenue : d.electricityRevenue,
+      ) || 1000000;
       const y = d3.scaleLinear()
         .domain([0, maxVal * 1.15])
         .nice()
@@ -400,11 +524,13 @@ export const RevenueD3Chart: React.FC<RevenueD3ChartProps> = ({
             y: posY,
             title: d.data.monthLabel,
             items: [
-              { label: 'Flat Rent Collections', value: `${currency}${d.data.rentRevenue.toLocaleString('en-IN')}`, color: '#10b981' },
-              { label: 'Electricity Utility Payments', value: `${currency}${d.data.electricityRevenue.toLocaleString('en-IN')}`, color: '#0ea5e9' },
-              { label: 'Total Combined Inflow', value: `${currency}${d.data.totalRevenue.toLocaleString('en-IN')}`, color: '#2563eb' },
+              isRentView
+                ? { label: 'Rent Received', value: `${currency}${d.data.rentRevenue.toLocaleString('en-IN')}`, color: '#10b981' }
+                : { label: 'Electricity Paid', value: `${currency}${d.data.electricityRevenue.toLocaleString('en-IN')}`, color: '#0ea5e9' },
             ],
-            footer: `Power Used: ${d.data.totalKwh.toLocaleString()} kWh`
+            footer: isRentView
+              ? undefined
+              : `Power Used: ${d.data.totalKwh.toLocaleString()} kWh`
           });
         })
         .on('mouseleave', () => setActiveTooltip(null))
@@ -420,8 +546,8 @@ export const RevenueD3Chart: React.FC<RevenueD3ChartProps> = ({
         .attr('class', 'total-label text-[11px] font-mono fill-slate-600 font-semibold')
         .attr('text-anchor', 'middle')
         .attr('x', d => (x0(d.shortLabel) || 0) + x0.bandwidth() / 2)
-        .attr('y', d => y(d.totalRevenue) - 6)
-        .text(d => formatINR(d.totalRevenue));
+        .attr('y', d => y(isRentView ? d.rentRevenue : d.electricityRevenue) - 6)
+        .text(d => formatINR(isRentView ? d.rentRevenue : d.electricityRevenue));
 
       // X Axis
       g.append('g').attr('transform', `translate(0,${height})`)
@@ -488,131 +614,66 @@ export const RevenueD3Chart: React.FC<RevenueD3ChartProps> = ({
       g.selectAll('.tick text').attr('class', 'text-[11px] fill-slate-600 font-medium');
     }
 
-  }, [monthlyData, categoryExpenses, chartMode, currency]);
+  }, [monthlyData, categoryExpenses, chartMode, currency, selectedMetrics]);
 
   return (
-    <div className="rounded-2xl border border-slate-200 bg-brand-surface/95 p-5 sm:p-6 space-y-5 shadow-sm">
-      
-      {/* Header and Chart View Switcher */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-slate-200 pb-4">
-        
-        <div>
-          <div className="flex items-center gap-2">
-            <TrendingUp className="w-5 h-5 text-emerald-700" />
-            <h2 className="text-base sm:text-lg font-bold tracking-tight text-slate-950">
-              Revenue, Electricity & Building Expense Analytics
-            </h2>
-            <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-300">
-              D3 Engine · INR ({currency})
-            </span>
-          </div>
-          <p className="text-xs text-slate-500 mt-1">
-            Visualizing monthly tenant rent, electricity utility collections, full building operating expenses, and net profit.
-          </p>
-        </div>
-
-        {/* View Switcher Controls */}
-        <div className="flex items-center bg-slate-100/90 border border-slate-300 rounded-lg p-0.5 text-xs">
-          <button
-            onClick={() => setChartMode('cashflow')}
-            className={`px-3 py-1.5 rounded font-medium transition-colors cursor-pointer ${
-              chartMode === 'cashflow'
-                ? 'bg-brand-tab-active text-white font-semibold shadow-sm'
-                : 'text-slate-500 hover:text-slate-950'
-            }`}
-          >
-            Cash Flow (Inflow vs Outflow)
-          </button>
-          <button
-            onClick={() => setChartMode('revenue_split')}
-            className={`px-3 py-1.5 rounded font-medium transition-colors cursor-pointer ${
-              chartMode === 'revenue_split'
-                ? 'bg-brand-tab-active text-white font-semibold shadow-sm'
-                : 'text-slate-500 hover:text-slate-950'
-            }`}
-          >
-            Rent vs Electricity Split
-          </button>
-          <button
-            onClick={() => setChartMode('expense_breakdown')}
-            className={`px-3 py-1.5 rounded font-medium transition-colors cursor-pointer ${
-              chartMode === 'expense_breakdown'
-                ? 'bg-brand-tab-active text-white font-semibold shadow-sm'
-                : 'text-slate-500 hover:text-slate-950'
-            }`}
-          >
-            Building Expenses by Category
-          </button>
-        </div>
-
-      </div>
-
-      {/* Financial Health KPI Summary Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-        
-        {/* Total Rent Revenue */}
-        <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80">
-          <div className="text-slate-500 font-medium flex items-center justify-between text-[11px]">
-            <span>Total Rent Inflow</span>
-            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
-          </div>
-          <div className="text-lg font-bold text-slate-950 font-mono mt-1 tabular-nums">
-            {currency}{totals.totalRent.toLocaleString('en-IN')}
-          </div>
-          <div className="text-[10px] text-slate-500 mt-0.5">
-            Flat tenant lease collections
-          </div>
-        </div>
-
-        {/* Total Electricity Utility Payments */}
-        <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80">
-          <div className="text-slate-500 font-medium flex items-center justify-between text-[11px]">
-            <span>Electricity Utility Collections</span>
-            <span className="w-2.5 h-2.5 rounded-full bg-sky-500"></span>
-          </div>
-          <div className="text-lg font-bold text-sky-700 font-mono mt-1 tabular-nums">
-            {currency}{totals.totalElec.toLocaleString('en-IN')}
-          </div>
-          <div className="text-[10px] text-slate-500 mt-0.5">
-            Tenant sub-meter payments
-          </div>
-        </div>
-
-        {/* Total Building Expenses */}
-        <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80">
-          <div className="text-slate-500 font-medium flex items-center justify-between text-[11px]">
-            <span>Full Building Expenses</span>
-            <span className="w-2.5 h-2.5 rounded-full bg-rose-500"></span>
-          </div>
-          <div className="text-lg font-bold text-blue-700 font-mono mt-1 tabular-nums">
-            {currency}{totals.totalExp.toLocaleString('en-IN')}
-          </div>
-          <div className="text-[10px] text-slate-500 mt-0.5">
-            Common power, security, AMC
-          </div>
-        </div>
-
-        {/* Net Operating Profit */}
-        <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80">
-          <div className="text-slate-500 font-medium flex items-center justify-between text-[11px]">
-            <span>Net Operating Profit</span>
-            <span className="text-[10px] font-mono text-emerald-700">{totals.avgMargin.toFixed(0)}% Margin</span>
-          </div>
-          <div className="text-lg font-bold text-emerald-700 font-mono mt-1 tabular-nums">
-            {currency}{totals.totalProfit.toLocaleString('en-IN')}
-          </div>
-          <div className="text-[10px] text-slate-500 mt-0.5">
-            Revenue minus full building expenses
-          </div>
-        </div>
-
-      </div>
-
+    <div className="space-y-3 rounded-xl border border-slate-200 bg-brand-surface/95 p-4 shadow-sm">
       {/* SVG Canvas Container */}
-      <div 
-        ref={containerRef} 
-        className="relative w-full overflow-hidden min-h-[330px] bg-slate-50/70 rounded-xl border border-slate-200/80 p-2"
+      <div
+        ref={containerRef}
+        className="relative min-h-[260px] w-full overflow-hidden rounded-lg border border-brand-border/50 bg-brand-tint/60 p-2"
       >
+        <div className="absolute right-3 top-3 z-10 flex items-center gap-1 rounded-lg border border-slate-300 bg-white/95 p-1 shadow-sm">
+          {([
+            {
+              metric: 'rent',
+              label: 'Rent Recv.',
+              activeClass: 'bg-emerald-600 text-white hover:bg-emerald-700',
+              inactiveClass: 'bg-emerald-50 text-emerald-800 opacity-50 hover:opacity-75',
+            },
+            {
+              metric: 'electricity',
+              label: 'Electricity Received',
+              activeClass: 'bg-violet-600 text-white hover:bg-violet-700',
+              inactiveClass: 'bg-violet-50 text-violet-800 opacity-50 hover:opacity-75',
+            },
+            {
+              metric: 'electricityPaid',
+              label: 'Electricity Paid',
+              activeClass: 'bg-fuchsia-500 text-white hover:bg-fuchsia-600',
+              inactiveClass: 'bg-fuchsia-50 text-fuchsia-800 opacity-50 hover:opacity-75',
+            },
+            {
+              metric: 'expense',
+              label: 'Expense',
+              activeClass: 'bg-red-600 text-white hover:bg-red-700',
+              inactiveClass: 'bg-red-50 text-red-800 opacity-50 hover:opacity-75',
+            },
+          ] as const).map(({ metric, label, activeClass, inactiveClass }) => {
+            const isSelected = selectedMetrics.includes(metric);
+            return (
+              <Button
+                key={metric}
+                type="button"
+                onClick={() => setSelectedMetrics(current => {
+                  if (current.includes(metric)) {
+                    return current.length === 1
+                      ? current
+                      : current.filter(item => item !== metric);
+                  }
+                  return [...current, metric];
+                })}
+                className={`px-2.5 py-1.5 text-[10px] font-semibold ${
+                  isSelected ? activeClass : inactiveClass
+                }`}
+                aria-pressed={isSelected}
+              >
+                {label}
+              </Button>
+            );
+          })}
+        </div>
+
         <svg ref={svgRef} className="w-full block select-none" />
 
         {/* Floating Tooltip */}
@@ -647,51 +708,6 @@ export const RevenueD3Chart: React.FC<RevenueD3ChartProps> = ({
             )}
           </div>
         )}
-      </div>
-
-      {/* Legend & Summary Info */}
-      <div className="flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-500 pt-1">
-        <div className="flex items-center gap-5 flex-wrap">
-          {chartMode === 'cashflow' && (
-            <>
-              <div className="flex items-center gap-2">
-                <span className="w-3 h-3 rounded bg-emerald-500"></span>
-                <span className="text-slate-700 font-medium">Total Inflow (Rent + Power)</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="w-3 h-3 rounded bg-blue-500"></span>
-                <span className="text-slate-700 font-medium">Building Outflow (Expenses)</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="w-3 h-3 rounded bg-teal-600"></span>
-                <span className="text-slate-700 font-medium">Net Profit Line</span>
-              </div>
-            </>
-          )}
-
-          {chartMode === 'revenue_split' && (
-            <>
-              <div className="flex items-center gap-2">
-                <span className="w-3 h-3 rounded bg-emerald-500"></span>
-                <span className="text-slate-700 font-medium">Base Flat Rent</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="w-3 h-3 rounded bg-sky-500"></span>
-                <span className="text-slate-700 font-medium">Electricity Sub-Meter Collections</span>
-              </div>
-            </>
-          )}
-
-          {chartMode === 'expense_breakdown' && (
-            <div className="text-slate-500">
-              Showing complete building operating costs by functional category (Security, Lifts, Power, Cleaning).
-            </div>
-          )}
-        </div>
-
-        <div className="text-[11px] font-mono text-slate-500">
-          Showing: {effectiveBuildingId === 'all' ? 'All Buildings Consolidated' : activeBuilding?.name}
-        </div>
       </div>
 
     </div>

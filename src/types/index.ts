@@ -25,6 +25,7 @@ export interface Flat {
   fixedUtilityCharge?: number;
   isOccupied: boolean;
   isCommonArea?: boolean;
+  leaseStatus?: 'ACTIVE' | 'CLOSED' | 'LEFT_WITHOUT_PAYING';
   leaseStartDate: string;
   leaseEndDate?: string;
 }
@@ -63,9 +64,13 @@ export interface FlatMonthlyStatement {
   ratePerUnit: number;
   fixedUtilityCharge: number;
   electricityAmount: number; // (totalReading * ratePerUnit) + fixedUtilityCharge
+  electricityReceived?: number; // Optional report override for electricity collected
   totalDue: number; // lastMonthBalance + baseRent + electricityAmount
   paymentReceived: number;
   balanceThisMonth: number; // totalDue - paymentReceived
+  writtenOffAmount?: number;
+  writtenOffDate?: string;
+  writtenOffReason?: string;
   status: 'PAID' | 'PARTIAL' | 'UNPAID' | 'OVERDUE';
   payments: PaymentReceipt[];
   attachment?: {
@@ -77,15 +82,23 @@ export interface FlatMonthlyStatement {
 }
 
 export type ExpenseCategory = 
-  | 'COMMON_ELECTRICITY' 
+  | 'ELECTRICITY_PAID'
   | 'SECURITY_GUARDS' 
   | 'HOUSEKEEPING_STAFF' 
   | 'ELEVATOR_AMC' 
   | 'WATER_TANKERS' 
   | 'GENERATOR_DIESEL' 
   | 'REPAIRS_CIVIL' 
+  | 'PLUMBER'
   | 'PEST_CONTROL' 
-  | 'OTHER_FACILITIES';
+  | 'OTHER_FACILITIES'
+  | `CUSTOM:${string}`;
+
+export type ExpenseType =
+  | 'CASH_OUT'
+  | 'EXPENSE'
+  | 'LIABILITIES'
+  | 'REINVESTED';
 
 // Monthly Operating Expense for the entire building
 export interface BuildingExpense {
@@ -94,13 +107,16 @@ export interface BuildingExpense {
   buildingName: string;
   month: string; // YYYY-MM
   category: ExpenseCategory;
+  expenseType?: ExpenseType;
   title: string;
-  vendor: string;
+  vendor?: string;
   amount: number; // in ₹
   date: string;
   status: 'PAID' | 'PENDING';
   invoiceRef?: string;
   notes?: string;
+  meterNumber?: string;
+  meterReading?: number;
 }
 
 export type MaintenanceCategory = 

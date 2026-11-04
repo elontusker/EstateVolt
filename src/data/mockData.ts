@@ -285,7 +285,7 @@ export function generateInitialBuildingExpenses(
         buildingId: building.id,
         buildingName: building.name,
         month,
-        category: 'COMMON_ELECTRICITY',
+        category: 'ELECTRICITY_PAID',
         title: 'Common Meter Electricity (Lift, Pumps, Passage Lights)',
         vendor: 'State Electricity Distribution Co.',
         amount: isSummer ? 21500 : 16800,

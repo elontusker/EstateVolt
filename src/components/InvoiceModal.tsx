@@ -6,7 +6,6 @@ import {
   Copy, 
   Check, 
   Zap, 
-  Building2, 
   User, 
   Calendar, 
   Receipt,
@@ -110,9 +109,13 @@ Please remit payment via UPI / Bank Transfer by the 10th. Thank you!
           {/* Invoice Header */}
           <div className="border-b border-slate-200 pb-6 flex flex-col sm:flex-row justify-between items-start gap-4">
             <div>
-              <div className="flex items-center gap-2 text-emerald-700 font-bold text-xl tracking-tight">
-                <Building2 className="w-6 h-6" />
-                <span>EstateVolt Management</span>
+              <div className="flex items-center gap-3 text-emerald-700 font-bold text-xl tracking-tight">
+                <img
+                  src="/rently-brand.png"
+                  alt="Rently"
+                  className="h-16 w-auto object-contain"
+                />
+                <span>Management</span>
               </div>
               <p className="text-xs text-slate-400 mt-1 font-medium">
                 Estate Office · {statement.buildingName}

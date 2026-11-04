@@ -1,8 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { useProperty } from '../context/PropertyContext';
-import { CurrencySymbol } from '../types';
-import { Settings, X, Zap, RotateCcw } from 'lucide-react';
-import { Heading, Input } from './ui/Primitives';
+import { Settings, X, RotateCcw, Plus, Building2, Trash2, Zap } from 'lucide-react';
+import { Button, Heading, Input } from './ui/Primitives';
+import {
+  loadElectricityMeters,
+  saveElectricityMeters,
+} from '../utils/electricityMeters';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -10,41 +13,73 @@ interface SettingsModalProps {
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
-  const { buildings, flats, updateBuildingRates, updateBuilding, updateFlat, resetToSampleData } = useProperty();
+  const {
+    buildings,
+    flats,
+    selectedBuildingId,
+    setSelectedBuildingId,
+    updateBuilding,
+    updateFlat,
+    addBuilding,
+    resetToSampleData,
+  } = useProperty();
 
-  const [selectedBldId, setSelectedBldId] = useState<string>(buildings[0]?.id || '');
+  const [selectedBldId, setSelectedBldId] = useState<string>(
+    selectedBuildingId === 'all' ? buildings[0]?.id || '' : selectedBuildingId,
+  );
   const activeBuilding = buildings.find(b => b.id === selectedBldId) || buildings[0];
 
-  const [ratePerUnit, setRatePerUnit] = useState<number>(activeBuilding?.electricityRatePerUnit || 9.0);
-  const [fixedMeterFee, setFixedMeterFee] = useState<number>(activeBuilding?.fixedMeterCharge || 100);
-  const [currency, setCurrency] = useState<CurrencySymbol>(activeBuilding?.currency || '₹');
   const [buildingName, setBuildingName] = useState(activeBuilding?.name || '');
   const [buildingAddress, setBuildingAddress] = useState(activeBuilding?.address || '');
+  const [isAddingBuilding, setIsAddingBuilding] = useState(false);
+  const [newBuildingName, setNewBuildingName] = useState('');
+  const [newBuildingAddress, setNewBuildingAddress] = useState('');
+  const [newBuildingFloors, setNewBuildingFloors] = useState(1);
+  const [newBuildingUnits, setNewBuildingUnits] = useState(1);
+  const [newBuildingRate, setNewBuildingRate] = useState(9);
+  const [electricityMeters, setElectricityMeters] = useState<string[]>(
+    loadElectricityMeters,
+  );
 
   const [flatDrafts, setFlatDrafts] = useState<Record<string, {
+    tenantName: string;
     baseRent: number;
     electricityRatePerUnit: number;
-    fixedUtilityCharge: number;
   }>>({});
 
   useEffect(() => {
     if (!isOpen) return;
+    const buildingId =
+      selectedBuildingId === 'all'
+        ? buildings[0]?.id || ''
+        : selectedBuildingId;
+    setSelectedBldId(buildingId);
+    const selectedBuilding = buildings.find(building => building.id === buildingId);
+    if (selectedBuilding) {
+      setBuildingName(selectedBuilding.name);
+      setBuildingAddress(selectedBuilding.address);
+    }
+    setElectricityMeters(loadElectricityMeters());
     setFlatDrafts(Object.fromEntries(flats.map(flat => [flat.id, {
+      tenantName: flat.tenantName,
       baseRent: flat.baseRent,
       electricityRatePerUnit: flat.electricityRatePerUnit ?? activeBuilding?.electricityRatePerUnit ?? 9,
-      fixedUtilityCharge: flat.fixedUtilityCharge ?? activeBuilding?.fixedMeterCharge ?? 0,
     }])));
-  }, [isOpen, flats, activeBuilding?.electricityRatePerUnit, activeBuilding?.fixedMeterCharge]);
+  }, [
+    isOpen,
+    flats,
+    buildings,
+    selectedBuildingId,
+    activeBuilding?.electricityRatePerUnit,
+  ]);
 
   if (!isOpen) return null;
 
   const handleSelectBuilding = (bldId: string) => {
     setSelectedBldId(bldId);
+    setSelectedBuildingId(bldId);
     const b = buildings.find(item => item.id === bldId);
     if (b) {
-      setRatePerUnit(b.electricityRatePerUnit);
-      setFixedMeterFee(b.fixedMeterCharge);
-      setCurrency(b.currency);
       setBuildingName(b.name);
       setBuildingAddress(b.address);
     }
@@ -53,19 +88,27 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
   const handleSaveRates = (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeBuilding) return;
+    const normalizedMeters = electricityMeters
+      .map(meter => meter.trim())
+      .filter(Boolean);
+    if (normalizedMeters.length === 0) {
+      alert('Please keep at least one electricity meter.');
+      return;
+    }
+    if (
+      new Set(normalizedMeters.map(meter => meter.toLowerCase())).size !==
+      normalizedMeters.length
+    ) {
+      alert('Electricity meter names must be unique.');
+      return;
+    }
 
-    updateBuildingRates(activeBuilding.id, {
-      electricityRatePerUnit: ratePerUnit,
-      fixedMeterCharge: fixedMeterFee,
-      currency,
-    });
     updateBuilding({
       ...activeBuilding,
       name: buildingName.trim() || activeBuilding.name,
       address: buildingAddress.trim() || activeBuilding.address,
-      electricityRatePerUnit: ratePerUnit,
-      fixedMeterCharge: fixedMeterFee,
-      currency,
+      fixedMeterCharge: 0,
+      currency: '₹',
     });
     flats
       .filter(flat => flat.buildingId === activeBuilding.id)
@@ -74,14 +117,59 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
         if (!draft) return;
         updateFlat({
           ...flat,
+          tenantName: draft.tenantName.trim() || flat.tenantName,
           baseRent: draft.baseRent,
           electricityRatePerUnit: draft.electricityRatePerUnit,
-          fixedUtilityCharge: draft.fixedUtilityCharge,
+          fixedUtilityCharge: 0,
         });
       });
 
-    alert(`Bhagat Niwas details and flat-level rent and utility tariffs were updated.`);
+    saveElectricityMeters(normalizedMeters);
+    setElectricityMeters(normalizedMeters);
+    alert('Building details, electricity meters, rent, and utility tariffs were updated.');
     onClose();
+  };
+
+  const handleAddBuilding = (event: React.FormEvent) => {
+    event.preventDefault();
+    const name = newBuildingName.trim();
+    if (!name) return;
+    const id = `bld-${name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}-${Date.now()}`;
+    const address = newBuildingAddress.trim() || 'Address not provided';
+    addBuilding({
+      id,
+      name,
+      address,
+      totalFloors: Math.max(1, newBuildingFloors),
+      totalFlats: Math.max(0, newBuildingUnits),
+      electricityRatePerUnit: Math.max(0, newBuildingRate),
+      fixedMeterCharge: 0,
+      currency: '₹',
+    });
+    setSelectedBldId(id);
+    setSelectedBuildingId(id);
+    setBuildingName(name);
+    setBuildingAddress(address);
+    setNewBuildingName('');
+    setNewBuildingAddress('');
+    setNewBuildingFloors(1);
+    setNewBuildingUnits(1);
+    setNewBuildingRate(9);
+    setIsAddingBuilding(false);
+  };
+
+  const addElectricityMeter = () => {
+    let meterNumber = electricityMeters.length + 1;
+    let name = `Meter ${meterNumber}`;
+    while (
+      electricityMeters.some(
+        meter => meter.toLowerCase() === name.toLowerCase(),
+      )
+    ) {
+      meterNumber += 1;
+      name = `Meter ${meterNumber}`;
+    }
+    setElectricityMeters(current => [...current, name]);
   };
 
   return (
@@ -95,9 +183,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
               <Settings className="w-5 h-5" />
             </div>
             <div>
-              <Heading className="text-base font-bold text-slate-950">Bhagat Niwas Flat Configuration</Heading>
+              <Heading className="text-base font-bold text-slate-950">Building & Flat Configuration</Heading>
               <p className="text-xs text-slate-500">
-                Predefine monthly rent, electricity rate, and fixed utility charge for every flat
+                Edit each tenant name, monthly rent, and flat-level electricity tariff in Indian Rupees
               </p>
             </div>
           </div>
@@ -124,8 +212,78 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                 {b.name}
               </button>
             ))}
+            <Button
+              type="button"
+              onClick={() => setIsAddingBuilding(value => !value)}
+              className="ml-auto shrink-0 gap-1.5 border border-brand-primary/30 bg-brand-tint px-3 py-1.5 font-semibold text-brand-tab-active"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              Add building
+            </Button>
           </div>
         </div>
+
+        {isAddingBuilding && (
+          <form onSubmit={handleAddBuilding} className="border-b border-slate-200 bg-brand-tint/50 px-6 py-4 text-xs">
+            <div className="mb-3 flex items-center gap-2 font-bold text-slate-950">
+              <Building2 className="h-4 w-4 text-brand-primary" />
+              New building details
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+              <Input
+                value={newBuildingName}
+                onChange={event => setNewBuildingName(event.target.value)}
+                placeholder="Building name"
+                className="rounded-lg border border-slate-300 bg-slate-100 px-3 py-2 lg:col-span-2"
+                required
+              />
+              <Input
+                value={newBuildingAddress}
+                onChange={event => setNewBuildingAddress(event.target.value)}
+                placeholder="Address"
+                className="rounded-lg border border-slate-300 bg-slate-100 px-3 py-2 lg:col-span-2"
+              />
+              <Input
+                type="number"
+                min="1"
+                value={newBuildingFloors}
+                onChange={event => setNewBuildingFloors(Number(event.target.value) || 1)}
+                aria-label="Total floors"
+                className="rounded-lg border border-slate-300 bg-slate-100 px-3 py-2"
+              />
+              <Input
+                type="number"
+                min="0"
+                value={newBuildingUnits}
+                onChange={event => setNewBuildingUnits(Number(event.target.value) || 0)}
+                aria-label="Total flats"
+                className="rounded-lg border border-slate-300 bg-slate-100 px-3 py-2"
+              />
+              <Input
+                type="number"
+                min="0"
+                step="0.01"
+                value={newBuildingRate}
+                onChange={event => setNewBuildingRate(Number(event.target.value) || 0)}
+                aria-label="Electricity rate per unit"
+                className="rounded-lg border border-slate-300 bg-slate-100 px-3 py-2"
+              />
+              <div className="flex gap-2 lg:col-span-3 lg:justify-end">
+                <Button
+                  type="button"
+                  onClick={() => setIsAddingBuilding(false)}
+                  className="border border-slate-300 bg-slate-100 px-4 py-2 text-slate-700"
+                >
+                  Cancel
+                </Button>
+                <Button type="submit" className="gap-1.5 bg-brand-primary px-4 py-2 font-semibold text-white">
+                  <Plus className="h-3.5 w-3.5" />
+                  Create building
+                </Button>
+              </div>
+            </div>
+          </form>
+        )}
 
         {/* Rate Configuration Form */}
         <form onSubmit={handleSaveRates} className="p-6 space-y-4 text-xs">
@@ -162,67 +320,58 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
             </div>
           </div>
 
-          {/* Electricity Tariff per unit */}
-          <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <label className="text-slate-800 font-semibold flex items-center gap-1.5">
-                <Zap className="w-3.5 h-3.5 text-sky-700" />
-                <span>Electricity Tariff Rate (per kWh unit)</span>
-              </label>
-              <span className="text-[11px] text-slate-500 font-mono">
-                Formula: Units × Rate
-              </span>
-            </div>
-            <div className="relative">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 font-mono">
-                {currency}
-              </span>
-              <input
-                type="number"
-                step="0.1"
-                min="0"
-                value={ratePerUnit}
-                onChange={(e) => setRatePerUnit(parseFloat(e.target.value) || 0)}
-                className="w-full pl-8 pr-4 py-2 bg-slate-100 border border-slate-300 rounded-lg text-slate-950 font-mono font-bold text-sm focus:outline-none focus:border-brand-accent"
-                required
-              />
-            </div>
-            <p className="text-[11px] text-slate-500 mt-1">
-              Example: ₹9.00 means 250 units consumption equals ₹2,250.00.
-            </p>
-          </div>
-
-          {/* Fixed Meter Base Charge & Currency */}
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-slate-700 font-medium block mb-1">
-                Fixed Sub-Meter Line Charge ({currency})
-              </label>
-              <input
-                type="number"
-                step="10"
-                value={fixedMeterFee}
-                onChange={(e) => setFixedMeterFee(parseFloat(e.target.value) || 0)}
-                className="w-full px-3 py-2 bg-slate-100 border border-slate-300 rounded-lg text-slate-950 font-mono"
-              />
-              <span className="text-[10px] text-slate-500 block mt-0.5">Monthly meter service charge</span>
-            </div>
-
-            <div>
-              <label className="text-slate-700 font-medium block mb-1">
-                Unit of Measurement / Currency
-              </label>
-              <select
-                value={currency}
-                onChange={(e) => setCurrency(e.target.value)}
-                className="w-full px-3 py-2 bg-slate-100 border border-slate-300 rounded-lg text-slate-950 font-mono"
+          <div className="overflow-hidden rounded-xl border border-slate-300">
+            <div className="flex items-center justify-between gap-3 border-b border-slate-300 bg-slate-100/90 px-4 py-3">
+              <div>
+                <p className="flex items-center gap-2 font-bold text-slate-950">
+                  <Zap className="h-4 w-4 text-violet-700" />
+                  Electricity expense meters
+                </p>
+                <p className="mt-0.5 text-xs text-slate-500">
+                  These meters appear in the Electricity Paid expense dropdown.
+                </p>
+              </div>
+              <Button
+                type="button"
+                onClick={addElectricityMeter}
+                className="shrink-0 gap-1.5 border border-violet-200 bg-violet-50 px-3 py-2 font-semibold text-violet-700 hover:bg-violet-100"
               >
-                <option value="₹">₹ (INR - Indian Rupee)</option>
-                <option value="$">$ (USD)</option>
-                <option value="€">€ (EUR)</option>
-                <option value="£">£ (GBP)</option>
-                <option value="AED">AED (Dirham)</option>
-              </select>
+                <Plus className="h-3.5 w-3.5" />
+                Add meter
+              </Button>
+            </div>
+            <div className="grid gap-2 p-3 sm:grid-cols-2">
+              {electricityMeters.map((meter, index) => (
+                <div key={index} className="flex items-center gap-2">
+                  <Input
+                    value={meter}
+                    onChange={event =>
+                      setElectricityMeters(current =>
+                        current.map((item, itemIndex) =>
+                          itemIndex === index ? event.target.value : item,
+                        ),
+                      )
+                    }
+                    aria-label={`Electricity meter ${index + 1}`}
+                    className="min-w-0 flex-1 rounded-lg border border-slate-300 bg-slate-100 px-3 py-2 font-mono"
+                    required
+                  />
+                  <Button
+                    type="button"
+                    onClick={() =>
+                      setElectricityMeters(current =>
+                        current.filter((_, itemIndex) => itemIndex !== index),
+                      )
+                    }
+                    disabled={electricityMeters.length === 1}
+                    className="border border-rose-200 bg-rose-50 p-2 text-rose-700 hover:bg-rose-100"
+                    title="Remove meter"
+                    aria-label={`Remove ${meter}`}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+              ))}
             </div>
           </div>
 
@@ -235,20 +384,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
             </div>
             <div className="max-h-80 overflow-y-auto">
               <div className="grid grid-cols-4 gap-2 border-b border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold uppercase tracking-wider text-slate-500">
-                <span>Flat / Resident</span>
+                <span>Flat</span>
+                <span>Tenant name</span>
                 <span>Monthly rent</span>
                 <span>Rate per kWh</span>
-                <span>Fixed charge</span>
               </div>
               {flats
                 .filter(flat => flat.buildingId === activeBuilding?.id)
                 .map(flat => {
                   const draft = flatDrafts[flat.id] || {
+                    tenantName: flat.tenantName,
                     baseRent: flat.baseRent,
-                    electricityRatePerUnit: flat.electricityRatePerUnit ?? ratePerUnit,
-                    fixedUtilityCharge: flat.fixedUtilityCharge ?? fixedMeterFee,
+                    electricityRatePerUnit: flat.electricityRatePerUnit ?? activeBuilding?.electricityRatePerUnit ?? 9,
                   };
-                  const updateDraft = (key: keyof typeof draft, value: number) =>
+                  const updateDraft = (key: keyof typeof draft, value: number | string) =>
                     setFlatDrafts(current => ({
                       ...current,
                       [flat.id]: { ...draft, [key]: value },
@@ -257,8 +406,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                     <div key={flat.id} className="grid grid-cols-4 items-center gap-2 border-b border-slate-200/70 px-3 py-2 last:border-b-0">
                       <div className="min-w-0">
                         <p className="font-semibold text-slate-950">Flat #{flat.flatNumber}</p>
-                        <p className="truncate text-xs text-slate-500">{flat.isCommonArea ? 'Common area' : flat.tenantName}</p>
                       </div>
+                      <Input
+                        type="text"
+                        value={draft.tenantName}
+                        onChange={event => updateDraft('tenantName', event.target.value)}
+                        className="min-w-0 rounded-lg border border-slate-300 bg-slate-100 px-2 py-1.5"
+                      />
                       <Input
                         type="number"
                         min="0"
@@ -274,38 +428,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                         onChange={event => updateDraft('electricityRatePerUnit', Number(event.target.value) || 0)}
                         className="min-w-0 rounded-lg border border-slate-300 bg-slate-100 px-2 py-1.5 font-mono"
                       />
-                      <Input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        value={draft.fixedUtilityCharge}
-                        onChange={event => updateDraft('fixedUtilityCharge', Number(event.target.value) || 0)}
-                        className="min-w-0 rounded-lg border border-slate-300 bg-slate-100 px-2 py-1.5 font-mono"
-                      />
                     </div>
                   );
                 })}
-            </div>
-          </div>
-
-          {/* Live Bill Calculation Sample Preview */}
-          <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 space-y-1.5">
-            <span className="text-slate-500 font-semibold block text-[11px]">
-              Live Automated Calculation Preview (Sample 250 kWh usage):
-            </span>
-            <div className="font-mono text-xs text-slate-700 space-y-0.5">
-              <div className="flex justify-between">
-                <span>250 units × {currency}{ratePerUnit}/unit:</span>
-                <span>{currency}{(250 * ratePerUnit).toFixed(2)}</span>
-              </div>
-              <div className="flex justify-between text-slate-500">
-                <span>+ Fixed Meter Fee:</span>
-                <span>{currency}{fixedMeterFee.toFixed(2)}</span>
-              </div>
-              <div className="flex justify-between font-bold text-emerald-700 pt-1 border-t border-slate-200">
-                <span>Total Electricity Bill:</span>
-                <span>{currency}{(250 * ratePerUnit + fixedMeterFee).toFixed(2)}</span>
-              </div>
             </div>
           </div>
 

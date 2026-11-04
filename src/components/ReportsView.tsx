@@ -1,36 +1,61 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import {
-  BarChart3,
   CalendarRange,
   Download,
-  Filter,
-  ReceiptText,
-  Zap,
+  Search,
   ChevronDown,
   ChevronUp,
   Trophy,
+  X,
 } from "lucide-react";
 import { useProperty } from "../context/PropertyContext";
-import { Button, Heading, Select } from "./ui/Primitives";
+import { Button, Heading, Input, Select } from "./ui/Primitives";
+import { formatMonth } from "../utils/formatMonth";
+import { RevenueD3Chart } from "./RevenueD3Chart";
+import { BuildingExpensesView } from "./BuildingExpensesView";
 
 type ReportPeriod = "MONTHLY" | "YEARLY";
-type ElectricityFilter = "ALL" | "RECEIVED";
 
 export const ReportsView: React.FC = () => {
   const {
     statements,
     buildingExpenses,
     buildings,
+    flats,
     selectedBuildingId,
     selectedMonth,
+    setSelectedMonth,
+    updateStatement,
+    endLease,
+    leaveWithoutPaying,
   } = useProperty();
   const [period, setPeriod] = useState<ReportPeriod>("MONTHLY");
   const [reportMonth, setReportMonth] = useState(selectedMonth);
   const [reportYear, setReportYear] = useState(selectedMonth.slice(0, 4));
-  const [electricityFilter, setElectricityFilter] =
-    useState<ElectricityFilter>("ALL");
-  const [tenantFilter, setTenantFilter] = useState("ALL");
+  const [tenantFilter, setTenantFilter] = useState("");
   const [showDetails, setShowDetails] = useState(false);
+  const [rankingPeriod, setRankingPeriod] = useState("ALL");
+  const [filterPortalTarget, setFilterPortalTarget] = useState<HTMLElement | null>(null);
+  const [paymentDetailDraft, setPaymentDetailDraft] = useState<{
+    statementId: string;
+    paymentDate: string;
+    tenantName: string;
+    flatNumber: string;
+    baseRent: number;
+    electricityReceived: number;
+    paymentReceived: number;
+    balanceThisMonth: number;
+  } | null>(null);
+
+  useEffect(() => {
+    setReportMonth(selectedMonth);
+    setReportYear(current => current === "ALL" ? current : selectedMonth.slice(0, 4));
+  }, [selectedMonth]);
+
+  useEffect(() => {
+    setFilterPortalTarget(document.getElementById("report-filter-slot"));
+  }, []);
 
   const availableYears = useMemo(
     () =>
@@ -39,18 +64,45 @@ export const ReportsView: React.FC = () => {
       ).sort((a, b) => b.localeCompare(a)),
     [statements],
   );
+  const availableMonths = useMemo(
+    () =>
+      Array.from(new Set(statements.map(statement => statement.month)))
+        .sort((a, b) => b.localeCompare(a)),
+    [statements],
+  );
 
   const availableTenants = useMemo(
     () =>
       Array.from(
         new Set(
           statements
-            .filter(statement => selectedBuildingId === "all" || statement.buildingId === selectedBuildingId)
+            .filter(statement => {
+              if (
+                selectedBuildingId !== "all" &&
+                statement.buildingId !== selectedBuildingId
+              ) {
+                return false;
+              }
+              return period === "MONTHLY"
+                ? statement.month === reportMonth
+                : reportYear === "ALL" ||
+                    statement.month.startsWith(`${reportYear}-`);
+            })
             .map(statement => statement.tenantName),
         ),
       ).sort((a, b) => a.localeCompare(b)),
-    [statements, selectedBuildingId],
+    [
+      statements,
+      selectedBuildingId,
+      period,
+      reportMonth,
+      reportYear,
+    ],
   );
+
+  useEffect(() => {
+    setTenantFilter("");
+  }, [selectedBuildingId, period, reportMonth, reportYear]);
 
   const reportStatements = useMemo(
     () =>
@@ -65,15 +117,11 @@ export const ReportsView: React.FC = () => {
         const inPeriod =
           period === "MONTHLY"
             ? statement.month === reportMonth
-            : statement.month.startsWith(`${reportYear}-`);
+            : reportYear === "ALL" || statement.month.startsWith(`${reportYear}-`);
         if (!inPeriod) return false;
-        if (tenantFilter !== "ALL" && statement.tenantName !== tenantFilter) {
-          return false;
-        }
-
         if (
-          electricityFilter === "RECEIVED" &&
-          statement.paymentReceived <= 0
+          tenantFilter.trim() &&
+          !statement.tenantName.toLowerCase().includes(tenantFilter.trim().toLowerCase())
         ) {
           return false;
         }
@@ -86,7 +134,6 @@ export const ReportsView: React.FC = () => {
       period,
       reportMonth,
       reportYear,
-      electricityFilter,
       tenantFilter,
     ],
   );
@@ -103,7 +150,7 @@ export const ReportsView: React.FC = () => {
 
         return period === "MONTHLY"
           ? expense.month === reportMonth
-          : expense.month.startsWith(`${reportYear}-`);
+          : reportYear === "ALL" || expense.month.startsWith(`${reportYear}-`);
       }),
     [
       buildingExpenses,
@@ -118,15 +165,15 @@ export const ReportsView: React.FC = () => {
     () =>
       reportStatements.reduce(
         (totals, statement) => {
-          const electricityReceived = Math.min(
-            statement.paymentReceived,
-            statement.electricityAmount,
-          );
+          const electricityReceived =
+            statement.electricityReceived ??
+            Math.min(statement.paymentReceived, statement.electricityAmount);
           totals.totalBilled += statement.totalDue;
           totals.totalReceived += statement.paymentReceived;
           totals.electricityBilled += statement.electricityAmount;
           totals.electricityReceived += electricityReceived;
           totals.outstanding += Math.max(0, statement.balanceThisMonth);
+          totals.lostRent += statement.writtenOffAmount || 0;
           return totals;
         },
         {
@@ -135,6 +182,7 @@ export const ReportsView: React.FC = () => {
           electricityBilled: 0,
           electricityReceived: 0,
           outstanding: 0,
+          lostRent: 0,
         },
       ),
     [reportStatements],
@@ -144,10 +192,18 @@ export const ReportsView: React.FC = () => {
     (total, expense) => total + expense.amount,
     0,
   );
+  const activeTenantCount = new Set(
+    reportStatements.map(
+      statement => `${statement.flatId}::${statement.tenantName.toLowerCase()}`,
+    ),
+  ).size;
+  const electricityPaidExpense = periodExpenses
+    .filter(expense => expense.category === "ELECTRICITY_PAID")
+    .reduce((total, expense) => total + expense.amount, 0);
+  const reportProfit = metrics.totalReceived - expenseTotal;
   const currency =
     buildings.find((building) => building.id === selectedBuildingId)
       ?.currency || "₹";
-
   const yearlyRows = useMemo(() => {
     const months = new Map<
       string,
@@ -173,22 +229,24 @@ export const ReportsView: React.FC = () => {
       row.billed += statement.totalDue;
       row.received += statement.paymentReceived;
       row.electricity += statement.electricityAmount;
-      row.electricityReceived += Math.min(
-        statement.paymentReceived,
-        statement.electricityAmount,
-      );
+      row.electricityReceived +=
+        statement.electricityReceived ??
+        Math.min(statement.paymentReceived, statement.electricityAmount);
       row.outstanding += Math.max(0, statement.balanceThisMonth);
       row.records += 1;
       months.set(statement.month, row);
     });
 
-    return Array.from(months.entries()).sort(([a], [b]) => a.localeCompare(b));
+    return Array.from(months.entries()).sort(([a], [b]) => b.localeCompare(a));
   }, [reportStatements]);
 
   const tenantTotals = useMemo(() => {
     const totals = new Map<string, { rent: number; paid: number; records: number }>();
     statements
-      .filter(statement => selectedBuildingId === "all" || statement.buildingId === selectedBuildingId)
+      .filter(statement => {
+        if (selectedBuildingId !== "all" && statement.buildingId !== selectedBuildingId) return false;
+        return rankingPeriod === "ALL" || statement.month.startsWith(`${rankingPeriod}-`);
+      })
       .forEach(statement => {
         const current = totals.get(statement.tenantName) || { rent: 0, paid: 0, records: 0 };
         current.rent += statement.baseRent;
@@ -198,8 +256,61 @@ export const ReportsView: React.FC = () => {
       });
     return Array.from(totals.entries())
       .sort(([, a], [, b]) => b.paid - a.paid)
-      .slice(0, 8);
-  }, [statements, selectedBuildingId]);
+      .slice(0, 3);
+  }, [statements, selectedBuildingId, rankingPeriod]);
+
+  const openPaymentDetailEditor = (statementId: string) => {
+    const statement = statements.find(item => item.id === statementId);
+    if (!statement) return;
+    setPaymentDetailDraft({
+      statementId: statement.id,
+      paymentDate: statement.paymentDate || statement.billingDate || `${statement.month}-01`,
+      tenantName: statement.tenantName,
+      flatNumber: statement.flatNumber,
+      baseRent: statement.baseRent,
+      electricityReceived:
+        statement.electricityReceived ??
+        Math.min(statement.paymentReceived, statement.electricityAmount),
+      paymentReceived: statement.paymentReceived,
+      balanceThisMonth: statement.balanceThisMonth,
+    });
+  };
+
+  const savePaymentDetailEdits = (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!paymentDetailDraft) return;
+    updateStatement(paymentDetailDraft.statementId, {
+      paymentDate: paymentDetailDraft.paymentDate,
+      tenantName: paymentDetailDraft.tenantName.trim(),
+      flatNumber: paymentDetailDraft.flatNumber.trim(),
+      baseRent: Math.max(0, paymentDetailDraft.baseRent),
+      electricityReceived: Math.max(0, paymentDetailDraft.electricityReceived),
+      paymentReceived: Math.max(0, paymentDetailDraft.paymentReceived),
+      balanceThisMonth: paymentDetailDraft.balanceThisMonth,
+    });
+    setPaymentDetailDraft(null);
+  };
+
+  const handleTenantAction = (
+    action: string,
+    statementId: string,
+    flatId: string,
+    tenantName: string,
+  ) => {
+    if (action === "EDIT") {
+      openPaymentDetailEditor(statementId);
+      return;
+    }
+    const flat = flats.find(item => item.id === flatId);
+    if (!flat?.isOccupied) return;
+    const today = new Date().toISOString().split("T")[0];
+    if (action === "CLOSE" && confirm(`Close the lease for ${tenantName} with the balance still collectible?`)) {
+      endLease(flatId, today);
+    }
+    if (action === "LEFT_UNPAID" && confirm(`Mark ${tenantName} as left without paying and move the latest balance to lost money?`)) {
+      leaveWithoutPaying(flatId, today);
+    }
+  };
 
   const exportReport = () => {
     const headers = [
@@ -209,9 +320,7 @@ export const ReportsView: React.FC = () => {
       "Flat",
       "Tenant",
       "Rent",
-      "Electricity Billed",
       "Electricity Received",
-      "Total Billed",
       "Total Payment",
       "Outstanding",
       "Status",
@@ -223,9 +332,8 @@ export const ReportsView: React.FC = () => {
       statement.flatNumber,
       statement.tenantName,
       statement.baseRent,
-      statement.electricityAmount,
-      Math.min(statement.paymentReceived, statement.electricityAmount),
-      statement.totalDue,
+      statement.electricityReceived ??
+        Math.min(statement.paymentReceived, statement.electricityAmount),
       statement.paymentReceived,
       statement.balanceThisMonth,
       statement.status,
@@ -241,7 +349,7 @@ export const ReportsView: React.FC = () => {
     );
     const link = document.createElement("a");
     link.href = url;
-    link.download = `EstateVolt_${period}_${period === "MONTHLY" ? reportMonth : reportYear}_Report.csv`;
+    link.download = `Rently_${period}_${period === "MONTHLY" ? reportMonth : reportYear}_Report.csv`;
     link.click();
     URL.revokeObjectURL(url);
   };
@@ -250,137 +358,166 @@ export const ReportsView: React.FC = () => {
     `${currency}${value.toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-        <div>
-          <div className="mb-2 flex items-center gap-2 text-emerald-700">
-            <BarChart3 className="h-5 w-5" />
-            <span className="text-xs font-bold uppercase tracking-wider">
-              Collections intelligence
-            </span>
+    <div className="space-y-3">
+      {filterPortalTarget && createPortal(
+        <div className="flex min-w-max items-center gap-2 px-2">
+          <div className="flex rounded-lg border border-slate-300 bg-slate-50 p-1">
+            {(["MONTHLY", "YEARLY"] as ReportPeriod[]).map(option => (
+              <Button
+                key={option}
+                type="button"
+                onClick={() => setPeriod(option)}
+                className={`px-3 py-1.5 text-xs font-semibold ${
+                  period === option
+                    ? "bg-brand-tab-active text-white shadow-sm"
+                    : "text-slate-500 hover:bg-slate-100"
+                }`}
+              >
+                {option === "MONTHLY" ? "Monthly report" : "Yearly report"}
+              </Button>
+            ))}
           </div>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-950">
-            Monthly & Yearly Reports
-          </h1>
-          <p className="mt-1 text-sm text-slate-500">
-            Track billed rent, electricity collections, expenses, and
-            outstanding balances for any reporting period.
-          </p>
-        </div>
-        <button
-          onClick={exportReport}
-          className="flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-slate-100 px-4 py-2 text-xs font-semibold text-slate-800 hover:bg-slate-200"
-        >
-          <Download className="h-4 w-4" />
-          Export report
-        </button>
-      </div>
 
-      <div className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-brand-surface p-4 lg:flex-row lg:items-center lg:justify-between">
-        <div className="flex rounded-lg border border-slate-300 bg-slate-50 p-1">
-          {(["MONTHLY", "YEARLY"] as ReportPeriod[]).map((option) => (
-            <button
-              key={option}
-              onClick={() => setPeriod(option)}
-              className={`rounded-md px-4 py-2 text-xs font-semibold transition-colors ${
-                period === option
-                  ? "bg-brand-tab-active text-white shadow-sm"
-                  : "text-slate-500 hover:text-slate-950"
-              }`}
-            >
-              {option === "MONTHLY" ? "Monthly report" : "Yearly report"}
-            </button>
-          ))}
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
           <div className="flex items-center gap-2 rounded-lg border border-slate-300 bg-slate-100 px-3 py-2">
             <CalendarRange className="h-4 w-4 text-slate-500" />
             {period === "MONTHLY" ? (
-              <input
-                type="month"
+              <Select
                 value={reportMonth}
-                onChange={(event) => setReportMonth(event.target.value)}
-                className="bg-transparent font-mono text-xs text-slate-950 outline-none"
-              />
-            ) : (
-              <select
-                value={reportYear}
-                onChange={(event) => setReportYear(event.target.value)}
+                onChange={event => {
+                  setReportMonth(event.target.value);
+                  setSelectedMonth(event.target.value);
+                }}
                 className="bg-transparent font-mono text-xs text-slate-950 outline-none"
               >
-                {availableYears.map((year) => (
-                  <option key={year} value={year} className="bg-slate-100">
-                    {year}
-                  </option>
+                {availableMonths.map(month => (
+                  <option key={month} value={month}>{formatMonth(month)}</option>
                 ))}
-              </select>
+              </Select>
+            ) : (
+              <Select
+                value={reportYear}
+                onChange={event => {
+                  const year = event.target.value;
+                  setReportYear(year);
+                  if (year !== "ALL") {
+                    setSelectedMonth(`${year}-${selectedMonth.slice(5, 7)}`);
+                  }
+                }}
+                className="bg-transparent font-mono text-xs text-slate-950 outline-none"
+              >
+                <option value="ALL">All years</option>
+                {availableYears.map(year => (
+                  <option key={year} value={year}>{year}</option>
+                ))}
+              </Select>
             )}
           </div>
-          <div className="flex items-center gap-2 rounded-lg border border-slate-300 bg-slate-100 px-3 py-2">
-            <Filter className="h-4 w-4 text-slate-500" />
-            <Select
-              value={electricityFilter}
-              onChange={(event) =>
-                setElectricityFilter(
-                  event.target.value as ElectricityFilter,
-                )
-              }
-              className="bg-transparent text-xs text-slate-950 outline-none"
-            >
-              <option value="ALL" className="bg-slate-100">
-                All collection records
-              </option>
-              <option value="RECEIVED" className="bg-slate-100">
-                Electricity received only
-              </option>
-            </Select>
-          </div>
-          <div className="flex items-center gap-2 rounded-lg border border-slate-300 bg-slate-100 px-3 py-2">
-            <Select
+
+          <div className="flex min-w-52 items-center gap-2 rounded-lg border border-slate-300 bg-slate-100 px-3 py-2">
+            <Search className="h-4 w-4 shrink-0 text-slate-500" />
+            <Input
+              type="search"
+              list="report-tenant-options"
               value={tenantFilter}
               onChange={event => setTenantFilter(event.target.value)}
-              className="max-w-56 bg-transparent text-xs text-slate-950 outline-none"
+              placeholder="Search tenant..."
+              className="min-w-0 flex-1 bg-transparent text-xs text-slate-950 outline-none"
               aria-label="Filter reports by tenant"
-            >
-              <option value="ALL">All tenants</option>
+            />
+            <datalist id="report-tenant-options">
               {availableTenants.map(tenant => (
-                <option key={tenant} value={tenant}>{tenant}</option>
+                <option key={tenant} value={tenant} />
               ))}
-            </Select>
+            </datalist>
           </div>
-        </div>
+          <Button
+            type="button"
+            onClick={exportReport}
+            className="rounded-lg border border-slate-300 bg-slate-100 p-2 text-slate-700 hover:bg-slate-200"
+            title="Export report"
+            aria-label="Export report"
+          >
+            <Download className="h-4 w-4" />
+          </Button>
+        </div>,
+        filterPortalTarget,
+      )}
+
+      <div className="flex items-center">
+        <h1 className="text-lg font-bold tracking-tight text-slate-950">
+          Monthly & Yearly Reports
+        </h1>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
+      <div className={`grid gap-2 sm:grid-cols-2 ${
+        tenantFilter.trim() ? "xl:grid-cols-5" : "xl:grid-cols-8"
+      }`}>
+        <div className="app-surface rounded-xl p-2.5">
+          <p className="text-[10px] font-medium text-slate-500">
+            Active Tenant
+          </p>
+          <p className="mt-1 font-mono text-base font-bold text-slate-950">
+            {activeTenantCount.toLocaleString("en-IN")}
+          </p>
+        </div>
         {[
-          ["Total billed", metrics.totalBilled, "text-slate-950"],
           ["Payments received", metrics.totalReceived, "text-emerald-700"],
-          ["Electricity billed", metrics.electricityBilled, "text-sky-700"],
           [
-            "Electricity received",
+            "Electricity Received",
             metrics.electricityReceived,
-            "text-blue-700",
+            "text-emerald-700",
           ],
-          ["Outstanding", metrics.outstanding, "text-rose-600"],
-          ["Building expenses", expenseTotal, "text-blue-700"],
+          ["Lost Rent", metrics.lostRent, "text-rose-600"],
+          ["Outstanding Balance", metrics.outstanding, "text-amber-700"],
+          ...(
+            tenantFilter.trim()
+              ? []
+              : [
+                  ["Electricity paid", electricityPaidExpense, "text-orange-700"],
+                  ["Total Expenses", expenseTotal, "text-blue-700"],
+                  ["Profit", reportProfit, reportProfit >= 0 ? "text-emerald-700" : "text-rose-600"],
+                ]
+          ),
         ].map(([label, value, color]) => (
-          <div key={String(label)} className="app-surface rounded-2xl p-4">
-            <p className="text-[11px] font-medium text-slate-500">{label}</p>
-            <p className={`mt-2 font-mono text-xl font-bold ${color}`}>
+          <div key={String(label)} className="app-surface rounded-xl p-2.5">
+            <p className="text-[10px] font-medium text-slate-500">{label}</p>
+            <p className={`mt-1 font-mono text-base font-bold ${color}`}>
               {money(Number(value))}
             </p>
           </div>
         ))}
       </div>
 
+      <RevenueD3Chart
+        buildingId={selectedBuildingId}
+        months={Array.from(new Set(reportStatements.map(statement => statement.month)))}
+        collectionFilter="ALL"
+      />
+
+      <BuildingExpensesView
+        reportPeriod={period}
+        reportMonth={reportMonth}
+        reportYear={reportYear}
+      />
+
       <div className="app-surface rounded-2xl p-5">
-        <div className="mb-4 flex items-center gap-2">
-          <Trophy className="h-5 w-5 text-brand-primary" />
-          <div>
-            <Heading className="text-sm font-bold text-slate-950">Top paying tenants · all time</Heading>
-            <p className="text-xs text-slate-500">Total rent billed and payments received since 2019.</p>
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Trophy className="h-5 w-5 text-brand-primary" />
+            <div>
+              <Heading className="text-sm font-bold text-slate-950">TOP 3 PAYING TENANTS</Heading>
+              <p className="text-xs text-slate-500">Payments received for the selected year or overall history.</p>
+            </div>
           </div>
+          <Select
+            value={rankingPeriod}
+            onChange={event => setRankingPeriod(event.target.value)}
+            className="rounded-lg border border-slate-300 bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-950"
+            aria-label="Top payer ranking period"
+          >
+            <option value="ALL">Overall · since 2019</option>
+            {availableYears.map(year => <option key={year} value={year}>{year}</option>)}
+          </Select>
         </div>
         <div className="space-y-3">
           {tenantTotals.map(([tenant, totals], index) => {
@@ -409,8 +546,8 @@ export const ReportsView: React.FC = () => {
           <div>
             <p className="text-sm font-bold text-slate-950">
               {period === "MONTHLY"
-                ? "Tenant collection detail"
-                : "Monthly performance summary"}
+                ? "Tenant Payment Detail"
+                : "Monthly Rent Summary"}
             </p>
             <p className="mt-0.5 text-xs text-slate-400">
               {reportStatements.length} matching billing records
@@ -432,12 +569,11 @@ export const ReportsView: React.FC = () => {
                 <tr>
                   <th className="px-4 py-3">Payment date</th>
                   <th className="px-4 py-3">Tenant / Flat</th>
-                  <th className="px-4 py-3">Building</th>
                   <th className="px-4 py-3 text-right">Rent</th>
-                  <th className="px-4 py-3 text-right">Electricity billed</th>
-                  <th className="px-4 py-3 text-right">Electricity received</th>
+                  <th className="px-4 py-3 text-right">Electricity Received</th>
                   <th className="px-4 py-3 text-right">Total payment</th>
                   <th className="px-4 py-3 text-right">Balance</th>
+                  <th className="px-4 py-3 text-center">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200">
@@ -454,21 +590,16 @@ export const ReportsView: React.FC = () => {
                         Flat #{statement.flatNumber}
                       </p>
                     </td>
-                    <td className="px-4 py-3 text-slate-700">
-                      {statement.buildingName}
-                    </td>
                     <td className="px-4 py-3 text-right font-mono text-slate-800">
                       {money(statement.baseRent)}
                     </td>
-                    <td className="px-4 py-3 text-right font-mono text-sky-700">
-                      {money(statement.electricityAmount)}
-                    </td>
-                    <td className="px-4 py-3 text-right font-mono text-blue-700">
+                    <td className="px-4 py-3 text-right font-mono text-emerald-700">
                       {money(
-                        Math.min(
-                          statement.paymentReceived,
-                          statement.electricityAmount,
-                        ),
+                        statement.electricityReceived ??
+                          Math.min(
+                            statement.paymentReceived,
+                            statement.electricityAmount,
+                          ),
                       )}
                     </td>
                     <td className="px-4 py-3 text-right font-mono text-emerald-700">
@@ -476,6 +607,34 @@ export const ReportsView: React.FC = () => {
                     </td>
                     <td className="px-4 py-3 text-right font-mono text-rose-600">
                       {money(Math.max(0, statement.balanceThisMonth))}
+                    </td>
+                    <td className="px-4 py-3">
+                      <Select
+                        value=""
+                        onChange={event => handleTenantAction(
+                          event.target.value,
+                          statement.id,
+                          statement.flatId,
+                          statement.tenantName,
+                        )}
+                        className="rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-[11px] font-semibold text-slate-700"
+                        aria-label={`Actions for ${statement.tenantName}`}
+                      >
+                        <option value="">Select action</option>
+                        <option value="EDIT">Edit payment detail</option>
+                        <option
+                          value="CLOSE"
+                          disabled={!flats.find(flat => flat.id === statement.flatId)?.isOccupied}
+                        >
+                          Close lease
+                        </option>
+                        <option
+                          value="LEFT_UNPAID"
+                          disabled={!flats.find(flat => flat.id === statement.flatId)?.isOccupied}
+                        >
+                          Left without paying
+                        </option>
+                      </Select>
                     </td>
                   </tr>
                 ))}
@@ -486,11 +645,8 @@ export const ReportsView: React.FC = () => {
               <thead className="bg-slate-100/90 text-[11px] text-slate-700">
                 <tr>
                   <th className="px-4 py-3">Month</th>
-                  <th className="px-4 py-3 text-right">Records</th>
-                  <th className="px-4 py-3 text-right">Total billed</th>
                   <th className="px-4 py-3 text-right">Payments received</th>
-                  <th className="px-4 py-3 text-right">Electricity billed</th>
-                  <th className="px-4 py-3 text-right">Electricity received</th>
+                  <th className="px-4 py-3 text-right">Electricity Received</th>
                   <th className="px-4 py-3 text-right">Outstanding</th>
                 </tr>
               </thead>
@@ -498,21 +654,12 @@ export const ReportsView: React.FC = () => {
                 {yearlyRows.map(([month, row]) => (
                   <tr key={month} className="hover:bg-slate-100/70">
                     <td className="px-4 py-3 font-mono font-bold text-slate-950">
-                      {month}
-                    </td>
-                    <td className="px-4 py-3 text-right font-mono text-slate-500">
-                      {row.records}
-                    </td>
-                    <td className="px-4 py-3 text-right font-mono text-slate-800">
-                      {money(row.billed)}
+                      {formatMonth(month)}
                     </td>
                     <td className="px-4 py-3 text-right font-mono text-emerald-700">
                       {money(row.received)}
                     </td>
-                    <td className="px-4 py-3 text-right font-mono text-sky-700">
-                      {money(row.electricity)}
-                    </td>
-                    <td className="px-4 py-3 text-right font-mono text-blue-700">
+                    <td className="px-4 py-3 text-right font-mono text-emerald-700">
                       {money(row.electricityReceived)}
                     </td>
                     <td className="px-4 py-3 text-right font-mono text-rose-600">
@@ -526,11 +673,132 @@ export const ReportsView: React.FC = () => {
         </div>}
       </div>
 
-      <div className="flex items-start gap-2 rounded-lg border border-blue-500/20 bg-blue-500/10 px-4 py-3 text-xs text-blue-700">
-        <Zap className="mt-0.5 h-4 w-4 shrink-0" />
-        Electricity received is the portion of each recorded payment allocated
-        up to that statement&apos;s electricity charge.
-      </div>
+      {paymentDetailDraft && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/30 p-4 backdrop-blur-xs">
+          <form
+            onSubmit={savePaymentDetailEdits}
+            className="flex max-h-[92vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-brand-surface shadow-2xl"
+          >
+            <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+              <div>
+                <Heading level={2} className="text-base font-bold text-slate-950">
+                  Edit payment detail
+                </Heading>
+                <p className="mt-0.5 text-xs text-slate-500">
+                  Modify any value shown in the Tenant Payment Detail row.
+                </p>
+              </div>
+              <Button
+                type="button"
+                onClick={() => setPaymentDetailDraft(null)}
+                className="p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-950"
+                aria-label="Close payment detail editor"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+
+            <div className="grid min-h-0 gap-4 overflow-y-auto p-5 text-xs sm:grid-cols-2">
+              <label className="block">
+                <span className="mb-1.5 block font-medium text-slate-700">
+                  Payment date
+                </span>
+                <Input
+                  type="date"
+                  value={paymentDetailDraft.paymentDate}
+                  onChange={event =>
+                    setPaymentDetailDraft(current =>
+                      current ? { ...current, paymentDate: event.target.value } : current,
+                    )
+                  }
+                  className="w-full rounded-lg border border-slate-300 bg-slate-100 px-3 py-2.5 text-slate-950"
+                  required
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1.5 block font-medium text-slate-700">
+                  Tenant name
+                </span>
+                <Input
+                  value={paymentDetailDraft.tenantName}
+                  onChange={event =>
+                    setPaymentDetailDraft(current =>
+                      current ? { ...current, tenantName: event.target.value } : current,
+                    )
+                  }
+                  className="w-full rounded-lg border border-slate-300 bg-slate-100 px-3 py-2.5 text-slate-950"
+                  autoFocus
+                  required
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1.5 block font-medium text-slate-700">
+                  Flat number
+                </span>
+                <Input
+                  value={paymentDetailDraft.flatNumber}
+                  onChange={event =>
+                    setPaymentDetailDraft(current =>
+                      current ? { ...current, flatNumber: event.target.value } : current,
+                    )
+                  }
+                  className="w-full rounded-lg border border-slate-300 bg-slate-100 px-3 py-2.5 text-slate-950"
+                  required
+                />
+              </label>
+              {([
+                ['baseRent', 'Rent'],
+                ['electricityReceived', 'Electricity received'],
+                ['paymentReceived', 'Total payment'],
+                ['balanceThisMonth', 'Balance'],
+              ] as const).map(([field, label]) => (
+                <label key={field} className="block">
+                  <span className="mb-1.5 block font-medium text-slate-700">
+                    {label}
+                  </span>
+                  <Input
+                    type="number"
+                    step="any"
+                    value={paymentDetailDraft[field]}
+                    onChange={event =>
+                      setPaymentDetailDraft(current =>
+                        current
+                          ? {
+                              ...current,
+                              [field]: Number(event.target.value) || 0,
+                            }
+                          : current,
+                      )
+                    }
+                    className="w-full rounded-lg border border-slate-300 bg-slate-100 px-3 py-2.5 font-mono text-slate-950"
+                    required
+                  />
+                </label>
+              ))}
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-slate-500 sm:col-span-2">
+                Building is controlled from Settings and is not shown in Tenant Payment Detail.
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 border-t border-slate-200 px-5 py-4">
+              <Button
+                type="button"
+                onClick={() => setPaymentDetailDraft(null)}
+                className="border border-slate-300 bg-slate-100 px-4 py-2 font-semibold text-slate-700 hover:bg-slate-200"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                className="bg-brand-primary px-4 py-2 font-semibold text-white hover:bg-brand-primary-hover"
+              >
+                Save changes
+              </Button>
+            </div>
+          </form>
+        </div>
+      )}
+
     </div>
   );
 };

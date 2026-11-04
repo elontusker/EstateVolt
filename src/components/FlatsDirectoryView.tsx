@@ -1,11 +1,12 @@
-import React, { useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { useProperty } from '../context/PropertyContext';
 import { Flat } from '../types';
-import { Button, Heading } from './ui/Primitives';
+import { Button, Heading, Select } from './ui/Primitives';
+import { formatMonth } from '../utils/formatMonth';
 import { 
   Users, 
-  Search, 
-  Building2, 
+  CalendarRange,
   Plus, 
   Edit3, 
   CheckCircle2, 
@@ -17,18 +18,29 @@ import {
   Save,
   CalendarOff,
   UserPlus,
-  LayoutGrid,
-  List,
   Trash2
 } from 'lucide-react';
 
 export const FlatsDirectoryView: React.FC = () => {
-  const { flats, buildings, selectedBuildingId, updateFlat, addFlat, deleteFlat, endLease } = useProperty();
+  const {
+    flats,
+    buildings,
+    statements,
+    selectedBuildingId,
+    selectedMonth,
+    setSelectedMonth,
+    updateFlat,
+    addFlat,
+    deleteFlat,
+    endLease,
+  } = useProperty();
 
-  const [searchTerm, setSearchTerm] = useState('');
-  const [selectedFloor, setSelectedFloor] = useState<string>('ALL');
-  const [occupancyFilter, setOccupancyFilter] = useState<'ACTIVE' | 'VACANT' | 'ALL'>('ACTIVE');
-  const [viewMode, setViewMode] = useState<'LAYOUT' | 'LIST'>('LAYOUT');
+  const [reportMonth, setReportMonth] = useState(selectedMonth);
+  const [headerPortalTarget, setHeaderPortalTarget] = useState<HTMLElement | null>(null);
+
+  useEffect(() => {
+    setHeaderPortalTarget(document.getElementById('report-filter-slot'));
+  }, []);
 
   // Edit Flat Modal state
   const [editingFlat, setEditingFlat] = useState<Flat | null>(null);
@@ -46,40 +58,111 @@ export const FlatsDirectoryView: React.FC = () => {
 
   const activeBuilding = buildings.find(b => b.id === selectedBuildingId);
   const currency = activeBuilding ? activeBuilding.currency : '₹';
+  const buildingFlats = useMemo(
+    () =>
+      flats.filter(
+        flat =>
+          selectedBuildingId === 'all' ||
+          flat.buildingId === selectedBuildingId,
+      ),
+    [flats, selectedBuildingId],
+  );
+  const availableMonths = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          statements
+            .filter(statement =>
+              selectedBuildingId === 'all' ||
+              statement.buildingId === selectedBuildingId,
+            )
+            .map(statement => statement.month),
+        ),
+      ).sort((a, b) => b.localeCompare(a)),
+    [statements, selectedBuildingId],
+  );
+  useEffect(() => {
+    if (availableMonths.length > 0 && !availableMonths.includes(reportMonth)) {
+      setReportMonth(availableMonths[0]);
+    }
+  }, [availableMonths, reportMonth]);
 
-  const filteredFlats = useMemo(() => {
-    return flats.filter((flat) => {
-      if (selectedBuildingId !== 'all' && flat.buildingId !== selectedBuildingId) {
-        return false;
-      }
-      if (selectedFloor !== 'ALL' && flat.floor !== parseInt(selectedFloor, 10)) {
-        return false;
-      }
-      if (occupancyFilter === 'ACTIVE' && (!flat.isOccupied || flat.isCommonArea)) return false;
-      if (occupancyFilter === 'VACANT' && (flat.isOccupied || flat.isCommonArea)) return false;
-      if (searchTerm.trim() !== '') {
-        const q = searchTerm.toLowerCase();
-        const matchFlat = flat.flatNumber.toLowerCase().includes(q);
-        const matchTenant = flat.tenantName.toLowerCase().includes(q);
-        const matchPhone = flat.tenantPhone.toLowerCase().includes(q);
-        const matchMeter = flat.meterNumber.toLowerCase().includes(q);
-        if (!matchFlat && !matchTenant && !matchPhone && !matchMeter) {
-          return false;
-        }
-      }
-      return true;
+  const layoutItems = useMemo(() => {
+    const monthStatements = statements.filter(
+      statement =>
+        statement.month === reportMonth &&
+        (selectedBuildingId === 'all' ||
+          statement.buildingId === selectedBuildingId),
+    );
+    const currentFlatsById = new Map(flats.map(flat => [flat.id, flat]));
+    const hasCurrentFlatLinks = monthStatements.some(statement =>
+      currentFlatsById.has(statement.flatId),
+    );
+    const statementFlatIds = new Set(
+      monthStatements.map(statement => statement.flatId),
+    );
+    const inferFloor = (flatNumber: string) => {
+      const number = Number(flatNumber.replace(/\D/g, ''));
+      if (!number || number <= 14) return 1;
+      if (number <= 28) return 2;
+      return 3;
+    };
+
+    const statementItems = monthStatements.map(statement => {
+      const flat = currentFlatsById.get(statement.flatId);
+      return {
+        key: statement.id,
+        flat,
+        flatNumber: statement.flatNumber,
+        floor: flat?.floor ?? inferFloor(statement.flatNumber),
+        tenantName: statement.tenantName,
+        isOccupied: true,
+        isCommonArea: false,
+        balance: statement.balanceThisMonth,
+        leaseStartDate: flat?.leaseStartDate,
+      };
     });
-  }, [flats, selectedBuildingId, selectedFloor, occupancyFilter, searchTerm]);
+    const staticItems = buildingFlats
+      .filter(flat =>
+        flat.isCommonArea ||
+        (hasCurrentFlatLinks && !statementFlatIds.has(flat.id)),
+      )
+      .map(flat => ({
+        key: flat.id,
+        flat,
+        flatNumber: flat.flatNumber,
+        floor: flat.floor,
+        tenantName: flat.isCommonArea ? flat.tenantName : 'Vacant',
+        isOccupied: flat.isOccupied,
+        isCommonArea: flat.isCommonArea,
+        balance: 0,
+        leaseStartDate: flat.leaseStartDate,
+      }));
 
-  const buildingMap = useMemo(() => {
-    return new Map(buildings.map(b => [b.id, b.name]));
-  }, [buildings]);
+    return [...statementItems, ...staticItems];
+  }, [statements, reportMonth, selectedBuildingId, flats, buildingFlats]);
+
+  const floorLabel = (floor: number) => {
+    if (floor === 0) return 'Ground floor';
+    if (floor === 1) return '1st floor';
+    if (floor === 2) return '2nd floor';
+    return `Floor ${floor}`;
+  };
 
   const handleSaveFlatEdit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingFlat) return;
     updateFlat(editingFlat);
     setEditingFlat(null);
+  };
+
+  const openAddTenant = () => {
+    setNewBldId(
+      selectedBuildingId === 'all'
+        ? buildings[0]?.id || ''
+        : selectedBuildingId,
+    );
+    setIsAddModalOpen(true);
   };
 
   const handleAddNewFlat = (e: React.FormEvent) => {
@@ -114,6 +197,7 @@ export const FlatsDirectoryView: React.FC = () => {
       fixedUtilityCharge: bld.fixedMeterCharge,
       isOccupied: Boolean(newTenantName.trim()),
       isCommonArea: false,
+      leaseStatus: newTenantName.trim() ? 'ACTIVE' : 'CLOSED',
       leaseStartDate: newLeaseStart,
     };
 
@@ -127,243 +211,146 @@ export const FlatsDirectoryView: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      
-      {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <h1 className="flex flex-wrap items-center gap-2 text-2xl font-bold tracking-tight text-slate-950">
-            <span>Active Tenant & Lease Directory</span>
-            <span className="text-xs px-2 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-300 font-mono font-normal">
-              {flats.filter(flat => flat.isOccupied && (selectedBuildingId === 'all' || flat.buildingId === selectedBuildingId)).length} Active Tenants
-            </span>
-          </h1>
-          <p className="text-xs text-slate-500 mt-1">
-            One-page tenant list with lease status, contact details, rent, meter IDs, and end-lease actions.
-          </p>
-        </div>
+      {headerPortalTarget && createPortal(
+        <div className="flex min-w-max items-center gap-2 px-2">
+          <div className="flex items-center gap-2 rounded-lg border border-slate-300 bg-slate-100 px-3 py-2">
+            <CalendarRange className="h-4 w-4 text-slate-500" />
+            <Select
+              value={reportMonth}
+              onChange={event => {
+                setReportMonth(event.target.value);
+                setSelectedMonth(event.target.value);
+              }}
+              className="bg-transparent font-mono text-xs text-slate-950 outline-none"
+              aria-label="Filter layout by month"
+            >
+              {availableMonths.map(month => (
+                <option key={month} value={month}>{formatMonth(month)}</option>
+              ))}
+            </Select>
+          </div>
 
-        <button
-          onClick={() => setIsAddModalOpen(true)}
-          className="flex items-center gap-2 px-3.5 py-2 text-xs font-semibold text-white bg-brand-primary hover:bg-brand-primary-hover rounded-lg shadow-sm transition-colors cursor-pointer"
-        >
-          <UserPlus className="w-4 h-4" />
-          <span>Add New Tenant</span>
-        </button>
-      </div>
+        </div>,
+        headerPortalTarget,
+      )}
 
-      {/* Filter and Search */}
-      <div className="p-4 rounded-xl bg-brand-surface/90 border border-slate-200 flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3 text-xs">
-        
-        {/* Search */}
-        <div className="relative flex-1 max-w-md">
-          <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
-          <input
-            type="text"
-            placeholder="Search flat number, tenant name, phone or meter ID..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-9 pr-4 py-2 bg-slate-100/90 border border-slate-300/70 rounded-lg text-slate-950 placeholder-slate-400 focus:outline-none focus:border-slate-400"
-          />
-        </div>
-
-        {/* Floor Filter */}
-        <div className="flex items-center gap-2">
-          <span className="text-slate-500">Filter Floor:</span>
-          <select
-            value={selectedFloor}
-            onChange={(e) => setSelectedFloor(e.target.value)}
-            className="bg-slate-100 border border-slate-300 rounded-lg px-2.5 py-1.5 text-slate-950 focus:outline-none"
-          >
-            <option value="ALL">All Floors</option>
-            {[1, 2, 3, 4, 5, 6, 7, 8].map(fl => (
-              <option key={fl} value={fl}>Floor {fl}</option>
-            ))}
-          </select>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <span className="text-slate-500">Lease Status:</span>
-          <select
-            value={occupancyFilter}
-            onChange={(e) => setOccupancyFilter(e.target.value as 'ACTIVE' | 'VACANT' | 'ALL')}
-            className="bg-slate-100 border border-slate-300 rounded-lg px-2.5 py-1.5 text-slate-950 focus:outline-none"
-          >
-            <option value="ACTIVE">Active Tenants</option>
-            <option value="VACANT">Ended / Vacant</option>
-            <option value="ALL">All Flats</option>
-          </select>
-        </div>
-
-        <div className="flex items-center rounded-lg border border-slate-300 bg-slate-100 p-0.5">
-          <Button
-            type="button"
-            onClick={() => setViewMode('LAYOUT')}
-            className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 font-semibold ${
-              viewMode === 'LAYOUT' ? 'bg-brand-tab-active text-white' : 'text-slate-500'
-            }`}
-          >
-            <LayoutGrid className="h-3.5 w-3.5" />
-            Layout
-          </Button>
-          <Button
-            type="button"
-            onClick={() => setViewMode('LIST')}
-            className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 font-semibold ${
-              viewMode === 'LIST' ? 'bg-brand-tab-active text-white' : 'text-slate-500'
-            }`}
-          >
-            <List className="h-3.5 w-3.5" />
-            List
-          </Button>
-        </div>
-
-      </div>
-
-      {viewMode === 'LAYOUT' && (
-        <div className="app-surface rounded-2xl p-5">
+      <div className="app-surface rounded-2xl p-5">
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             <div>
-              <Heading className="text-sm font-bold text-slate-950">Bhagat Niwas occupancy layout</Heading>
-              <p className="mt-0.5 text-xs text-slate-500">Select a unit to edit its resident, rent, tariff, or availability.</p>
+              <Heading className="text-sm font-bold text-slate-950">
+                {selectedBuildingId === 'all'
+                  ? 'All buildings occupancy layout'
+                  : `${activeBuilding?.name || 'Building'} occupancy layout`}
+                {' · '}
+                {formatMonth(reportMonth)}
+              </Heading>
             </div>
             <div className="flex flex-wrap items-center gap-3 text-xs font-semibold">
-              <span className="flex items-center gap-1.5 text-emerald-800"><span className="h-2.5 w-2.5 rounded-full bg-emerald-500" />Occupied</span>
-              <span className="flex items-center gap-1.5 text-rose-700"><span className="h-2.5 w-2.5 rounded-full bg-rose-500" />Vacant</span>
+              <span className="flex items-center gap-1.5 text-emerald-800"><span className="h-2.5 w-2.5 rounded-full bg-emerald-400" />Active</span>
+              <span className="flex items-center gap-1.5 text-slate-700"><span className="h-2.5 w-2.5 rounded-full border border-slate-400 bg-white" />Vacant</span>
               <span className="flex items-center gap-1.5 text-slate-600"><span className="h-2.5 w-2.5 rounded-full bg-slate-500" />Common area</span>
             </div>
           </div>
-          <div className="space-y-4">
-            {Array.from(new Set(flats
-              .filter(flat => selectedBuildingId === 'all' || flat.buildingId === selectedBuildingId)
-              .map(flat => flat.floor)))
+          {layoutItems.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-6 py-12 text-center">
+              <Heading className="text-sm font-bold text-slate-950">
+                {buildingFlats.length === 0
+                  ? 'No building layout has been created yet'
+                  : 'No tenant records for the selected month'}
+              </Heading>
+              <p className="mt-1 text-xs text-slate-500">
+                {buildingFlats.length === 0
+                  ? 'Create the first flat to start this building layout.'
+                  : 'Choose another month to view its building layout.'}
+              </p>
+              {buildingFlats.length === 0 && selectedBuildingId !== 'all' && (
+                <Button
+                  type="button"
+                  onClick={openAddTenant}
+                  className="mt-4 inline-flex items-center gap-2 rounded-lg bg-brand-primary px-4 py-2 text-xs font-semibold text-white"
+                >
+                  <Plus className="h-4 w-4" />
+                  Create first flat
+                </Button>
+              )}
+            </div>
+          ) : (
+          <div className="grid gap-3 xl:grid-cols-3">
+            {Array.from(new Set(layoutItems
+              .map(item => item.floor)))
               .sort((a, b) => a - b)
               .map(floor => (
-                <section key={floor}>
-                  <p className="mb-2 text-xs font-bold uppercase tracking-wider text-slate-500">Floor {floor}</p>
-                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7">
-                    {flats
-                      .filter(flat => flat.floor === floor && (selectedBuildingId === 'all' || flat.buildingId === selectedBuildingId))
+                <section key={floor} className="rounded-xl border border-slate-200 bg-slate-50/70 p-3">
+                  <div className="mb-2 flex items-center justify-between">
+                    <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-slate-600">
+                      {floorLabel(floor)}
+                    </p>
+                    <span className="rounded-full bg-white px-2 py-0.5 font-mono text-[9px] font-semibold text-slate-400 shadow-sm">
+                      {layoutItems.filter(item => item.floor === floor).length} units
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 xl:grid-cols-3 2xl:grid-cols-4">
+                    {layoutItems
+                      .filter(item => item.floor === floor)
                       .sort((a, b) => a.flatNumber.localeCompare(b.flatNumber, undefined, { numeric: true }))
-                      .map(flat => (
+                      .map(item => (
                         <Button
-                          key={flat.id}
+                          key={item.key}
                           type="button"
-                          onClick={() => setEditingFlat({ ...flat })}
-                          className={`min-h-20 rounded-xl border p-3 text-left transition-transform hover:-translate-y-0.5 ${
-                            flat.isCommonArea
-                              ? 'border-slate-400 bg-slate-300/70 text-slate-700'
-                              : flat.isOccupied
-                                ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-950'
-                                : 'border-rose-500/40 bg-rose-500/15 text-rose-950'
+                          onClick={() => {
+                            if (item.flat) setEditingFlat({ ...item.flat });
+                          }}
+                          title={item.flat ? 'Edit flat or tenant' : 'Historical tenant record'}
+                          className={`flex min-h-20 flex-col items-center justify-center rounded-xl border px-2 py-2.5 text-center shadow-sm transition-all ${
+                            item.isCommonArea
+                              ? 'border-slate-500 bg-slate-400 text-slate-950 hover:bg-slate-300'
+                              : item.isOccupied
+                                ? 'border-emerald-900 bg-emerald-800 text-white hover:-translate-y-0.5 hover:bg-emerald-700'
+                                : 'border-slate-200 bg-white text-slate-950 hover:-translate-y-0.5 hover:border-slate-300'
                           }`}
                         >
-                          <span className="block font-mono text-xs font-bold">Flat #{flat.flatNumber}</span>
-                          <span className="mt-1 block truncate text-xs font-semibold">
-                            {flat.isCommonArea ? 'Common area' : flat.isOccupied ? flat.tenantName : 'Vacant'}
+                          <span className={`block font-mono text-xs font-medium leading-none ${
+                            item.isOccupied && !item.isCommonArea
+                              ? 'text-emerald-100'
+                              : 'text-slate-500'
+                          }`}>
+                            {item.flatNumber}
                           </span>
+                          <span className={`mt-2 block w-full truncate text-xs font-bold leading-none ${
+                            item.isOccupied && !item.isCommonArea
+                              ? 'text-white'
+                              : 'text-slate-950'
+                          }`}>
+                            {item.tenantName}
+                            {!item.tenantName.includes('(') &&
+                              item.leaseStartDate &&
+                              ` (${item.leaseStartDate.slice(8, 10)})`}
+                          </span>
+                          {item.isCommonArea ? (
+                            <span className="mt-2 block text-[10px] font-semibold leading-none text-slate-500">
+                              Common area
+                            </span>
+                          ) : (
+                            <span className={`mt-2 block font-mono text-xs font-bold leading-none ${
+                              item.isOccupied
+                                ? item.balance > 0
+                                  ? 'text-rose-200'
+                                  : 'text-emerald-100'
+                                : item.balance > 0
+                                  ? 'text-rose-600'
+                                  : 'text-emerald-700'
+                            }`}>
+                              {currency}{item.balance.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                            </span>
+                          )}
                         </Button>
                       ))}
                   </div>
                 </section>
               ))}
           </div>
-        </div>
-      )}
-
-      {/* Flats Grid Table */}
-      {viewMode === 'LIST' && <div className="rounded-xl border border-slate-200 bg-brand-surface/95 overflow-hidden shadow-sm">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs border-collapse">
-            <thead>
-              <tr className="bg-slate-100/90 text-slate-700 border-b border-slate-200 text-[11px] font-semibold tracking-wider">
-                <th className="py-3 px-3.5 whitespace-nowrap">Building</th>
-                <th className="py-3 px-3 whitespace-nowrap">Flat #</th>
-                <th className="py-3 px-3 whitespace-nowrap">Floor</th>
-                <th className="py-3 px-4 whitespace-nowrap">Resident Name</th>
-                <th className="py-3 px-4 whitespace-nowrap">Contact Phone & Email</th>
-                <th className="py-3 px-3.5 whitespace-nowrap">Electric Meter Serial</th>
-                <th className="py-3 px-3.5 text-right whitespace-nowrap">Base Monthly Rent</th>
-                <th className="py-3 px-3 whitespace-nowrap">Lease Start</th>
-                <th className="py-3 px-3 text-center whitespace-nowrap">Occupancy</th>
-                <th className="py-3 px-3.5 text-center whitespace-nowrap">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-200 font-sans">
-              {filteredFlats.length === 0 ? (
-                <tr>
-                  <td colSpan={10} className="py-12 text-center text-slate-500">
-                    No flats match your search criteria.
-                  </td>
-                </tr>
-              ) : (
-                filteredFlats.map((flat) => (
-                  <tr key={flat.id} className="hover:bg-slate-100/70 transition-colors">
-                    <td className="py-3 px-3.5 font-medium text-slate-700 whitespace-nowrap">
-                      {buildingMap.get(flat.buildingId) || flat.buildingId}
-                    </td>
-                    <td className="py-3 px-3 whitespace-nowrap font-mono font-bold text-slate-950">
-                      #{flat.flatNumber}
-                    </td>
-                    <td className="py-3 px-3 whitespace-nowrap text-slate-500 font-mono">
-                      Floor {flat.floor}
-                    </td>
-                    <td className="py-3 px-4 whitespace-nowrap font-medium text-slate-950">
-                      {flat.tenantName}
-                    </td>
-                    <td className="py-3 px-4 whitespace-nowrap text-slate-500">
-                      <div className="font-mono text-[11px] text-slate-700">{flat.tenantPhone}</div>
-                      <div className="text-[11px] text-slate-500">{flat.tenantEmail}</div>
-                    </td>
-                    <td className="py-3 px-3.5 whitespace-nowrap font-mono text-sky-700 text-xs">
-                      {flat.meterNumber}
-                    </td>
-                    <td className="py-3 px-3.5 text-right whitespace-nowrap font-mono font-bold text-slate-800">
-                      {currency}{flat.baseRent.toLocaleString('en-IN')}
-                    </td>
-                    <td className="py-3 px-3 whitespace-nowrap text-slate-500 font-mono text-[11px]">
-                      {flat.leaseStartDate}
-                    </td>
-                    <td className="py-3 px-3 text-center whitespace-nowrap">
-                      <span className={`inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded font-medium border ${
-                        flat.isOccupied
-                          ? 'text-emerald-700 bg-emerald-500/10 border-emerald-500/20'
-                          : 'text-slate-500 bg-slate-100 border-slate-300'
-                      }`}>
-                        {flat.isOccupied ? <CheckCircle2 className="w-3 h-3" /> : <CalendarOff className="w-3 h-3" />}
-                        {flat.isOccupied ? 'Active' : `Ended ${flat.leaseEndDate || ''}`}
-                      </span>
-                    </td>
-                    <td className="py-3 px-3.5 text-center whitespace-nowrap">
-                      <div className="flex items-center justify-center gap-1">
-                        <button
-                          onClick={() => setEditingFlat({ ...flat })}
-                          className="p-1.5 text-slate-500 hover:text-slate-950 hover:bg-slate-100 rounded transition-colors"
-                          title="Edit Flat or Tenant Info"
-                        >
-                          <Edit3 className="w-3.5 h-3.5" />
-                        </button>
-                        {flat.isOccupied && (
-                          <button
-                            onClick={() => {
-                              if (confirm(`Mark the lease for ${flat.tenantName} in Flat #${flat.flatNumber} as ended today?`)) {
-                                endLease(flat.id, new Date().toISOString().split('T')[0]);
-                              }
-                            }}
-                            className="p-1.5 text-slate-500 hover:text-rose-600 hover:bg-slate-100 rounded transition-colors"
-                            title="End tenant lease"
-                          >
-                            <CalendarOff className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>}
+          )}
+      </div>
 
       {/* Edit Flat Modal */}
       {editingFlat && (
@@ -446,6 +433,7 @@ export const FlatsDirectoryView: React.FC = () => {
                       ...editingFlat,
                       isOccupied: e.target.value === 'ACTIVE',
                       isCommonArea: e.target.value === 'COMMON',
+                      leaseStatus: e.target.value === 'ACTIVE' ? 'ACTIVE' : 'CLOSED',
                       tenantName: e.target.value === 'COMMON'
                         ? 'Common Area'
                         : editingFlat.tenantName,

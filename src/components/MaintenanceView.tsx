@@ -1,25 +1,18 @@
-import React, { useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { useProperty } from '../context/PropertyContext';
-import { MaintenanceRequest, MaintenanceStatus, MaintenancePriority, MaintenanceCategory } from '../types';
+import { formatMonth } from '../utils/formatMonth';
+import { MaintenanceRequest, MaintenanceStatus, MaintenancePriority } from '../types';
 import { 
-  Wrench, 
   Search, 
   Plus, 
   Download, 
-  CheckCircle, 
-  Clock, 
   AlertTriangle, 
   UserCheck, 
-  Phone, 
-  DollarSign, 
-  Filter,
-  CheckCircle2,
-  Calendar,
   AlertOctagon,
-  SlidersHorizontal,
-  ChevronRight,
   X
 } from 'lucide-react';
+import { Button, Input, Select } from './ui/Primitives';
 
 interface MaintenanceViewProps {
   onOpenNewTicket: () => void;
@@ -30,6 +23,7 @@ export const MaintenanceView: React.FC<MaintenanceViewProps> = ({ onOpenNewTicke
     maintenanceRequests, 
     updateMaintenanceStatus, 
     selectedBuildingId, 
+    selectedMonth,
     buildings,
     exportMaintenanceCSV 
   } = useProperty();
@@ -39,6 +33,18 @@ export const MaintenanceView: React.FC<MaintenanceViewProps> = ({ onOpenNewTicke
   const [priorityFilter, setPriorityFilter] = useState<string>('ALL');
   const [categoryFilter, setCategoryFilter] = useState<string>('ALL');
   const [viewMode, setViewMode] = useState<'board' | 'table'>('table');
+  const [periodScope, setPeriodScope] = useState<'MONTH' | 'YEAR' | 'ALL'>('ALL');
+  const [periodYear, setPeriodYear] = useState(selectedMonth.slice(0, 4));
+  const [filterPortalTarget, setFilterPortalTarget] = useState<HTMLElement | null>(null);
+
+  useEffect(() => {
+    setFilterPortalTarget(document.getElementById('report-filter-slot'));
+  }, []);
+
+  const availableYears = useMemo(
+    () => Array.from(new Set(maintenanceRequests.map(ticket => ticket.reportedDate.slice(0, 4)))).sort((a, b) => b.localeCompare(a)),
+    [maintenanceRequests],
+  );
 
   // Resolution modal state
   const [selectedTicket, setSelectedTicket] = useState<MaintenanceRequest | null>(null);
@@ -55,6 +61,8 @@ export const MaintenanceView: React.FC<MaintenanceViewProps> = ({ onOpenNewTicke
       if (selectedBuildingId !== 'all' && ticket.buildingId !== selectedBuildingId) {
         return false;
       }
+      if (periodScope === 'MONTH' && !ticket.reportedDate.startsWith(selectedMonth)) return false;
+      if (periodScope === 'YEAR' && !ticket.reportedDate.startsWith(periodYear)) return false;
       if (statusFilter !== 'ALL' && ticket.status !== statusFilter) {
         return false;
       }
@@ -77,7 +85,7 @@ export const MaintenanceView: React.FC<MaintenanceViewProps> = ({ onOpenNewTicke
       }
       return true;
     });
-  }, [maintenanceRequests, selectedBuildingId, statusFilter, priorityFilter, categoryFilter, searchTerm]);
+  }, [maintenanceRequests, selectedBuildingId, selectedMonth, periodScope, periodYear, statusFilter, priorityFilter, categoryFilter, searchTerm]);
 
   // Status metrics
   const metrics = useMemo(() => {
@@ -174,6 +182,111 @@ export const MaintenanceView: React.FC<MaintenanceViewProps> = ({ onOpenNewTicke
 
   return (
     <div className="space-y-6">
+      {filterPortalTarget && createPortal(
+        <div className="flex min-w-max items-center gap-2 px-2">
+          <div className="flex min-w-52 items-center gap-2 rounded-lg border border-slate-300 bg-slate-100 px-3 py-2">
+            <Search className="h-4 w-4 shrink-0 text-slate-500" />
+            <Input
+              type="search"
+              placeholder="Search maintenance..."
+              value={searchTerm}
+              onChange={event => setSearchTerm(event.target.value)}
+              className="min-w-0 flex-1 bg-transparent text-xs text-slate-950"
+              aria-label="Search maintenance requests"
+            />
+          </div>
+
+          <Select
+            value={periodScope}
+            onChange={event => setPeriodScope(event.target.value as 'MONTH' | 'YEAR' | 'ALL')}
+            className="rounded-lg border border-slate-300 bg-slate-100 px-3 py-2 text-xs text-slate-950"
+            aria-label="Filter maintenance by period"
+          >
+            <option value="ALL">Overall · since 2019</option>
+            <option value="MONTH">Selected month · {formatMonth(selectedMonth)}</option>
+            <option value="YEAR">Full year</option>
+          </Select>
+
+          {periodScope === 'YEAR' && (
+            <Select
+              value={periodYear}
+              onChange={event => setPeriodYear(event.target.value)}
+              className="rounded-lg border border-slate-300 bg-slate-100 px-3 py-2 text-xs text-slate-950"
+              aria-label="Filter maintenance by year"
+            >
+              {availableYears.map(year => <option key={year} value={year}>{year}</option>)}
+            </Select>
+          )}
+
+          <Select
+            value={statusFilter}
+            onChange={event => setStatusFilter(event.target.value)}
+            className="rounded-lg border border-slate-300 bg-slate-100 px-3 py-2 text-xs text-slate-950"
+            aria-label="Filter maintenance by status"
+          >
+            <option value="ALL">All statuses</option>
+            <option value="NEW">New</option>
+            <option value="IN_PROGRESS">In Progress</option>
+            <option value="WAITING_PARTS">Waiting Parts</option>
+            <option value="RESOLVED">Resolved</option>
+          </Select>
+
+          <Select
+            value={priorityFilter}
+            onChange={event => setPriorityFilter(event.target.value)}
+            className="rounded-lg border border-slate-300 bg-slate-100 px-3 py-2 text-xs text-slate-950"
+            aria-label="Filter maintenance by priority"
+          >
+            <option value="ALL">All priorities</option>
+            <option value="EMERGENCY">Emergency</option>
+            <option value="HIGH">High</option>
+            <option value="MEDIUM">Medium</option>
+            <option value="LOW">Low</option>
+          </Select>
+
+          <Select
+            value={categoryFilter}
+            onChange={event => setCategoryFilter(event.target.value)}
+            className="rounded-lg border border-slate-300 bg-slate-100 px-3 py-2 text-xs text-slate-950"
+            aria-label="Filter maintenance by category"
+          >
+            <option value="ALL">All categories</option>
+            <option value="ELECTRICAL">Electrical</option>
+            <option value="PLUMBING">Plumbing</option>
+            <option value="HVAC">HVAC</option>
+            <option value="CARPENTRY">Carpentry</option>
+            <option value="APPLIANCE">Appliance</option>
+          </Select>
+
+          <div className="flex rounded-lg border border-slate-300 bg-slate-50 p-1">
+            {(['table', 'board'] as const).map(mode => (
+              <Button
+                key={mode}
+                type="button"
+                onClick={() => setViewMode(mode)}
+                className={`px-3 py-1.5 text-xs font-semibold ${
+                  viewMode === mode
+                    ? 'bg-brand-tab-active text-white shadow-sm'
+                    : 'text-slate-500 hover:bg-slate-100'
+                }`}
+              >
+                {mode === 'table' ? 'Table' : 'Board'}
+              </Button>
+            ))}
+          </div>
+
+          <Button
+            type="button"
+            onClick={exportMaintenanceCSV}
+            className="border border-slate-300 bg-slate-100 p-2 text-slate-700 hover:bg-slate-200"
+            title="Export maintenance CSV"
+            aria-label="Export maintenance CSV"
+          >
+            <Download className="h-4 w-4" />
+          </Button>
+        </div>,
+        filterPortalTarget,
+      )}
       
       {/* Top Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -184,27 +297,17 @@ export const MaintenanceView: React.FC<MaintenanceViewProps> = ({ onOpenNewTicke
               {metrics.total} Requests Logged
             </span>
           </h1>
-          <p className="text-xs text-slate-500 mt-1">
-            Dispatch technicians, track repair statuses, and audit maintenance costs across all apartments.
-          </p>
         </div>
 
         <div className="flex items-center gap-2">
-          <button
+          <Button
+            type="button"
             onClick={onOpenNewTicket}
-            className="flex items-center gap-2 px-3.5 py-2 text-xs font-semibold text-white bg-brand-primary hover:bg-brand-primary-hover rounded-lg shadow-sm transition-colors cursor-pointer"
+            className="gap-2 bg-brand-primary px-3.5 py-2 text-xs font-semibold text-white shadow-sm hover:bg-brand-primary-hover"
           >
             <Plus className="w-4 h-4" />
             <span>Create New Request</span>
-          </button>
-
-          <button
-            onClick={exportMaintenanceCSV}
-            className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-slate-800 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-lg transition-colors cursor-pointer"
-          >
-            <Download className="w-3.5 h-3.5 text-slate-500" />
-            <span>Export CSV</span>
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -253,86 +356,6 @@ export const MaintenanceView: React.FC<MaintenanceViewProps> = ({ onOpenNewTicke
           </div>
           <div className="text-[10px] text-slate-500 mt-0.5">Satisfactorily completed</div>
         </div>
-      </div>
-
-      {/* Filter and Search Controls */}
-      <div className="p-4 rounded-xl bg-brand-surface/90 border border-slate-200 flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3 text-xs">
-        
-        {/* Search Input */}
-        <div className="relative flex-1 max-w-md">
-          <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
-          <input
-            type="text"
-            placeholder="Search issue title, flat #, tenant or technician..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full pl-9 pr-4 py-2 bg-slate-100/90 border border-slate-300/70 rounded-lg text-slate-950 placeholder-slate-400 focus:outline-none focus:border-slate-400"
-          />
-        </div>
-
-        {/* Quick Filters */}
-        <div className="flex items-center gap-2 flex-wrap">
-          {/* Status Filter */}
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            className="bg-slate-100 border border-slate-300 rounded-lg px-2.5 py-1.5 text-slate-950 focus:outline-none"
-          >
-            <option value="ALL">All Statuses</option>
-            <option value="NEW">New</option>
-            <option value="IN_PROGRESS">In Progress</option>
-            <option value="WAITING_PARTS">Waiting Parts</option>
-            <option value="RESOLVED">Resolved</option>
-          </select>
-
-          {/* Priority Filter */}
-          <select
-            value={priorityFilter}
-            onChange={(e) => setPriorityFilter(e.target.value)}
-            className="bg-slate-100 border border-slate-300 rounded-lg px-2.5 py-1.5 text-slate-950 focus:outline-none"
-          >
-            <option value="ALL">All Priorities</option>
-            <option value="EMERGENCY">Emergency</option>
-            <option value="HIGH">High</option>
-            <option value="MEDIUM">Medium</option>
-            <option value="LOW">Low</option>
-          </select>
-
-          {/* Category Filter */}
-          <select
-            value={categoryFilter}
-            onChange={(e) => setCategoryFilter(e.target.value)}
-            className="bg-slate-100 border border-slate-300 rounded-lg px-2.5 py-1.5 text-slate-950 focus:outline-none"
-          >
-            <option value="ALL">All Categories</option>
-            <option value="ELECTRICAL">Electrical</option>
-            <option value="PLUMBING">Plumbing</option>
-            <option value="HVAC">HVAC</option>
-            <option value="CARPENTRY">Carpentry</option>
-            <option value="APPLIANCE">Appliance</option>
-          </select>
-
-          {/* View toggle */}
-          <div className="flex items-center bg-slate-100 border border-slate-300 rounded-lg p-0.5">
-            <button
-              onClick={() => setViewMode('table')}
-              className={`px-2.5 py-1 rounded text-xs font-medium cursor-pointer ${
-                viewMode === 'table' ? 'bg-brand-tab-active text-white shadow-sm' : 'text-slate-500'
-              }`}
-            >
-              Table
-            </button>
-            <button
-              onClick={() => setViewMode('board')}
-              className={`px-2.5 py-1 rounded text-xs font-medium cursor-pointer ${
-                viewMode === 'board' ? 'bg-brand-tab-active text-white shadow-sm' : 'text-slate-500'
-              }`}
-            >
-              Board
-            </button>
-          </div>
-        </div>
-
       </div>
 
       {/* Table View */}

@@ -3,24 +3,15 @@ import { useProperty } from '../context/PropertyContext';
 import {
   Building2,
   Zap,
-  Receipt,
   CreditCard,
   Wrench,
   TrendingUp,
-  AlertCircle,
-  ArrowUpRight,
-  CheckCircle2,
-  Users,
-  Clock,
   ChevronRight,
   Wallet,
-  ArrowDownRight,
-  ShieldCheck,
   Filter
 } from 'lucide-react';
 import { ActiveTab } from './Sidebar';
-import modernApartmentImg from '../assets/images/modern_apartment_complex_1791033659877.jpg';
-import { RevenueD3Chart } from './RevenueD3Chart';
+import { formatMonth } from '../utils/formatMonth';
 
 interface DashboardViewProps {
   onNavigateTab: (tab: ActiveTab) => void;
@@ -40,6 +31,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     buildingExpenses,
     maintenanceRequests,
     selectedBuildingId,
+    setSelectedBuildingId,
     selectedMonth
   } = useProperty();
 
@@ -47,6 +39,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const [periodFilter, setPeriodFilter] = useState('MONTH');
   const [collectionFilter, setCollectionFilter] = useState<'ALL' | 'PAID' | 'DUE'>('ALL');
   const [occupancyFilter, setOccupancyFilter] = useState<'ALL' | 'ACTIVE'>('ALL');
+  const [rankingMetric, setRankingMetric] = useState<'ELECTRICITY' | 'RENT_PAID' | 'ELECTRICITY_BILLED'>('ELECTRICITY');
 
   useEffect(() => {
     setAnalyticsBuildingId(selectedBuildingId);
@@ -104,16 +97,20 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
   const openTickets = filteredMaintenance.filter(m => m.status === 'NEW' || m.status === 'IN_PROGRESS' || m.status === 'WAITING_PARTS');
 
-  // Top consumers
-  const topConsumers = [...filteredStatements]
-    .sort((a, b) => b.totalReading - a.totalReading)
-    .slice(0, 5);
+  const rankingValue = (statement: (typeof filteredStatements)[number]) => {
+    if (rankingMetric === 'RENT_PAID') return Math.min(statement.paymentReceived, statement.baseRent);
+    if (rankingMetric === 'ELECTRICITY_BILLED') return statement.electricityAmount;
+    return statement.totalReading;
+  };
+  const topThree = [...filteredStatements]
+    .sort((a, b) => rankingValue(b) - rankingValue(a))
+    .slice(0, 3);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
 
-      <div className="app-surface rounded-2xl p-4">
-        <div className="mb-3 flex items-center gap-2">
+      <div className="app-surface rounded-xl p-3">
+        <div className="mb-2 flex items-center gap-2">
           <Filter className="h-4 w-4 text-emerald-700" />
           <span className="text-xs font-bold uppercase tracking-wider text-slate-700">
             Analytics filters
@@ -122,15 +119,18 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             All overview metrics and rankings update together
           </span>
         </div>
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
           <label className="space-y-1">
             <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
               Building
             </span>
             <select
               value={analyticsBuildingId}
-              onChange={(event) => setAnalyticsBuildingId(event.target.value)}
-              className="w-full rounded-lg border border-slate-300 bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-950 outline-none focus:border-brand-accent"
+              onChange={(event) => {
+                setAnalyticsBuildingId(event.target.value);
+                setSelectedBuildingId(event.target.value);
+              }}
+              className="w-full rounded-lg border border-slate-300 bg-slate-100 px-2.5 py-1.5 text-xs font-semibold text-slate-950 outline-none focus:border-brand-accent"
             >
               <option value="all">All buildings</option>
               {buildings.map((building) => (
@@ -147,9 +147,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <select
               value={periodFilter}
               onChange={(event) => setPeriodFilter(event.target.value)}
-              className="w-full rounded-lg border border-slate-300 bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-950 outline-none focus:border-brand-accent"
+              className="w-full rounded-lg border border-slate-300 bg-slate-100 px-2.5 py-1.5 text-xs font-semibold text-slate-950 outline-none focus:border-brand-accent"
             >
-              <option value="MONTH">Selected month · {selectedMonth}</option>
+              <option value="MONTH">Selected month · {formatMonth(selectedMonth)}</option>
               {availableYears.map(year => (
                 <option key={year} value={`YEAR:${year}`}>Full year · {year}</option>
               ))}
@@ -163,7 +163,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <select
               value={collectionFilter}
               onChange={(event) => setCollectionFilter(event.target.value as 'ALL' | 'PAID' | 'DUE')}
-              className="w-full rounded-lg border border-slate-300 bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-950 outline-none focus:border-brand-accent"
+              className="w-full rounded-lg border border-slate-300 bg-slate-100 px-2.5 py-1.5 text-xs font-semibold text-slate-950 outline-none focus:border-brand-accent"
             >
               <option value="ALL">All billing statuses</option>
               <option value="PAID">Paid / clear only</option>
@@ -177,7 +177,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <select
               value={occupancyFilter}
               onChange={(event) => setOccupancyFilter(event.target.value as 'ALL' | 'ACTIVE')}
-              className="w-full rounded-lg border border-slate-300 bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-950 outline-none focus:border-brand-accent"
+              className="w-full rounded-lg border border-slate-300 bg-slate-100 px-2.5 py-1.5 text-xs font-semibold text-slate-950 outline-none focus:border-brand-accent"
             >
               <option value="ALL">All historical tenants</option>
               <option value="ACTIVE">Current active tenants only</option>
@@ -186,59 +186,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
       </div>
 
-      {/* Hero Banner with Architectural Complex Image */}
-      <div className="relative rounded-2xl overflow-hidden border border-slate-200 bg-brand-surface shadow-md">
-        <div className="absolute inset-0">
-          <img
-            src={modernApartmentImg}
-            alt="Multi-Building Residential Complex"
-            referrerPolicy="no-referrer"
-            className="w-full h-full object-cover opacity-25"
-          />
-          <div className="absolute inset-0 bg-gradient-to-r from-brand-surface via-brand-surface/85 to-transparent"></div>
-        </div>
-
-        <div className="relative p-6 sm:p-8 max-w-2xl space-y-3">
-          <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-md bg-emerald-500/10 border border-emerald-500/20 text-emerald-700 text-xs font-mono">
-            <Building2 className="w-3.5 h-3.5" />
-            <span>Multi-Building Complex Portfolio · {buildings.length} Properties</span>
-          </div>
-
-          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-slate-950">
-            {analyticsBuildingId === 'all' ? 'All Apartment Complexes' : activeBuilding?.name}
-          </h1>
-
-          <p className="text-xs sm:text-sm text-slate-700 leading-relaxed">
-            Managing <strong className="text-slate-950 font-mono">{totalFlats} apartments</strong> with sub-meter electricity readings, automated Rupee ({currency}) billing, flat rent rolls, full building operating expenses, and net profit tracking.
-          </p>
-
-          <div className="pt-2 flex items-center gap-3 flex-wrap">
-            <button
-              onClick={() => onNavigateTab('billing')}
-              className="px-4 py-2 bg-brand-primary hover:bg-brand-primary-hover text-white text-xs font-semibold rounded-lg shadow-sm transition-colors cursor-pointer"
-            >
-              Open Rent Ledger
-            </button>
-            <button
-              onClick={onOpenBatchReadings}
-              className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-300 text-xs font-medium rounded-lg transition-colors cursor-pointer"
-            >
-              Enter Month-End Meter Readings
-            </button>
-          </div>
-        </div>
-      </div>
-
       {/* Main KPI Stats Grid with Net Profit & Building Expenses */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
 
         {/* Total Inflow Collected */}
-        <div className="app-surface rounded-2xl p-4">
+        <div className="app-surface rounded-xl p-3">
           <div className="flex items-center justify-between text-xs text-slate-500">
             <span>Total Collections Received</span>
             <CreditCard className="w-4 h-4 text-emerald-600" />
           </div>
-          <div className="text-xl sm:text-2xl font-bold text-emerald-700 font-mono mt-2 tabular-nums">
+          <div className="mt-1 font-mono text-lg font-bold tabular-nums text-emerald-700">
             {currency}{totalCollected.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
           </div>
           <div className="text-[11px] text-slate-500 mt-1 flex items-center justify-between font-mono">
@@ -248,12 +205,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
 
         {/* Total Building Operating Expenses */}
-        <div className="app-surface rounded-2xl p-4">
+        <div className="app-surface rounded-xl p-3">
           <div className="flex items-center justify-between text-xs text-slate-500">
             <span>Building Operating Expenses</span>
             <Wallet className="w-4 h-4 text-blue-600" />
           </div>
-          <div className="text-xl sm:text-2xl font-bold text-blue-700 font-mono mt-2 tabular-nums">
+          <div className="mt-1 font-mono text-lg font-bold tabular-nums text-blue-700">
             {currency}{totalBuildingExpenses.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
           </div>
           <div className="text-[11px] text-slate-500 mt-1">
@@ -262,12 +219,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
 
         {/* Net Monthly Operating Profit */}
-        <div className="app-surface rounded-2xl p-4">
+        <div className="app-surface rounded-xl p-3">
           <div className="flex items-center justify-between text-xs text-slate-500">
             <span>Net Operating Income</span>
             <TrendingUp className="w-4 h-4 text-sky-700" />
           </div>
-          <div className="text-xl sm:text-2xl font-bold text-slate-950 font-mono mt-2 tabular-nums">
+          <div className="mt-1 font-mono text-lg font-bold tabular-nums text-slate-950">
             {currency}{netMonthlyProfit.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
           </div>
           <div className="text-[11px] text-slate-500 mt-1 flex items-center justify-between">
@@ -277,12 +234,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
 
         {/* Power Consumed & Electricity Billing */}
-        <div className="app-surface rounded-2xl p-4">
+        <div className="app-surface rounded-xl p-3">
           <div className="flex items-center justify-between text-xs text-slate-500">
             <span>Electricity Power Consumed</span>
             <Zap className="w-4 h-4 text-sky-700" />
           </div>
-          <div className="text-xl sm:text-2xl font-bold text-sky-700 font-mono mt-2 tabular-nums">
+          <div className="mt-1 font-mono text-lg font-bold tabular-nums text-sky-700">
             {totalKwh.toLocaleString()} <span className="text-xs font-normal text-slate-500">kWh</span>
           </div>
           <div className="text-[11px] text-slate-500 mt-1 flex items-center justify-between font-mono">
@@ -293,15 +250,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
       </div>
 
-      {/* D3-based Revenue, Utility & Building Expense Interactive Chart */}
-      <RevenueD3Chart
-        buildingId={analyticsBuildingId}
-        months={Array.from(new Set(filteredStatements.map(statement => statement.month)))}
-        collectionFilter={collectionFilter}
-      />
-
       {/* Buildings Breakdown Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
         {buildings
           .filter(bld => analyticsBuildingId === 'all' || bld.id === analyticsBuildingId)
           .map((bld) => {
@@ -317,7 +267,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           return (
             <div
               key={bld.id}
-              className="app-surface space-y-4 rounded-2xl p-5"
+              className="app-surface space-y-3 rounded-xl p-4"
             >
               <div className="flex items-start justify-between">
                 <div>
@@ -363,47 +313,55 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         })}
       </div>
 
-      {/* Two Column Grid: Top Electricity Usage & Open Maintenance */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      {/* Two Column Grid: Top 3 ranking & Open Maintenance */}
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
 
-        {/* Top Electricity Usage Flat List */}
-        <div className="app-surface space-y-4 rounded-2xl p-5">
-          <div className="flex items-center justify-between">
+        <div className="app-surface space-y-3 rounded-xl p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <Zap className="w-4 h-4 text-sky-700" />
-              <h3 className="font-bold text-slate-950 text-sm">Top Electricity Consumers (This Month)</h3>
+              <h3 className="font-bold text-slate-950 text-sm">Top 3 tenant ranking</h3>
             </div>
-            <button
-              onClick={() => onNavigateTab('billing')}
-              className="text-xs text-sky-700 hover:text-sky-700 cursor-pointer"
+            <select
+              value={rankingMetric}
+              onChange={(event) => setRankingMetric(event.target.value as typeof rankingMetric)}
+              className="rounded-lg border border-slate-300 bg-slate-100 px-2.5 py-1.5 text-xs font-semibold text-slate-800 outline-none"
             >
-              View Full Roll
-            </button>
+              <option value="ELECTRICITY">Electricity consumed</option>
+              <option value="RENT_PAID">Rent paid</option>
+              <option value="ELECTRICITY_BILLED">Electricity billed</option>
+            </select>
           </div>
 
           <div className="space-y-2.5">
-            {topConsumers.map((stmt) => (
+            {topThree.map((stmt, index) => (
               <div
                 key={stmt.id}
-                className="p-3 rounded-lg bg-slate-100/80 border border-slate-300/70 flex items-center justify-between text-xs"
+                className="flex items-center justify-between rounded-lg border border-slate-300/70 bg-slate-100/80 p-2.5 text-xs"
               >
                 <div>
                   <div className="flex items-center gap-2">
-                    <span className="font-bold text-slate-950">Flat #{stmt.flatNumber}</span>
+                    <span className="font-bold text-slate-950">{index + 1}. Flat #{stmt.flatNumber}</span>
                     <span className="text-slate-500 text-[11px]">· {stmt.buildingName}</span>
                     <span className="text-slate-500 text-[11px]">({stmt.tenantName})</span>
                   </div>
                   <div className="text-[11px] text-slate-500 font-mono mt-0.5">
-                    Start: {stmt.startReading} kWh · End: {stmt.endReading} kWh
+                    {stmt.tenantName} · {formatMonth(stmt.month)}
                   </div>
                 </div>
 
                 <div className="text-right font-mono">
                   <div className="font-bold text-sky-700 text-sm tabular-nums">
-                    {stmt.totalReading.toLocaleString()} kWh
+                    {rankingMetric === 'ELECTRICITY'
+                      ? `${stmt.totalReading.toLocaleString()} kWh`
+                      : `${currency}${rankingValue(stmt).toLocaleString('en-IN', { maximumFractionDigits: 0 })}`}
                   </div>
-                  <div className="text-[11px] text-emerald-700">
-                    {currency}{stmt.electricityAmount.toFixed(2)}
+                  <div className="text-[11px] text-slate-500">
+                    {rankingMetric === 'RENT_PAID'
+                      ? 'Payment received'
+                      : rankingMetric === 'ELECTRICITY_BILLED'
+                        ? 'Electricity charge'
+                        : `${currency}${stmt.electricityAmount.toFixed(2)} billed`}
                   </div>
                 </div>
               </div>
@@ -412,7 +370,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
 
         {/* Maintenance Section */}
-        <div className="app-surface space-y-4 rounded-2xl p-5">
+        <div className="app-surface space-y-3 rounded-xl p-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <Wrench className="w-4 h-4 text-blue-700" />
@@ -435,7 +393,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               openTickets.slice(0, 4).map((ticket) => (
                 <div
                   key={ticket.id}
-                  className="p-3 rounded-lg bg-slate-100/80 border border-slate-300/70 flex items-center justify-between text-xs"
+                  className="flex items-center justify-between rounded-lg border border-slate-300/70 bg-slate-100/80 p-2.5 text-xs"
                 >
                   <div className="space-y-0.5">
                     <div className="flex items-center gap-2">

@@ -2,17 +2,14 @@ import React from 'react';
 import { 
   LayoutDashboard, 
   ReceiptText, 
-  Wallet,
   Wrench, 
   Users, 
   ShieldCheck,
-  FileSpreadsheet,
-  BarChart3,
-  WalletCards
+  FileSpreadsheet
 } from 'lucide-react';
 import { useProperty } from '../context/PropertyContext';
 
-export type ActiveTab = 'dashboard' | 'reports' | 'balances' | 'billing' | 'expenses' | 'maintenance' | 'directory' | 'excel';
+export type ActiveTab = 'dashboard' | 'billing' | 'maintenance' | 'directory' | 'excel';
 
 interface SidebarProps {
   activeTab: ActiveTab;
@@ -23,7 +20,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   activeTab, 
   setActiveTab
 }) => {
-  const { statements, buildingExpenses, maintenanceRequests, flats, selectedBuildingId, selectedMonth } = useProperty();
+  const { statements, maintenanceRequests, flats, selectedBuildingId, selectedMonth } = useProperty();
 
   // Badge counts
   const filteredStmts = selectedBuildingId === 'all'
@@ -32,12 +29,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const pendingPaymentsCount = filteredStmts.filter(s => s.balanceThisMonth > 0).length;
   
-  const filteredExpenses = selectedBuildingId === 'all'
-    ? buildingExpenses.filter(e => e.month === selectedMonth)
-    : buildingExpenses.filter(e => e.buildingId === selectedBuildingId && e.month === selectedMonth);
-
-  const pendingExpensesCount = filteredExpenses.filter(e => e.status === 'PENDING').length;
-
   const filteredRequests = selectedBuildingId === 'all'
     ? maintenanceRequests
     : maintenanceRequests.filter(m => m.buildingId === selectedBuildingId);
@@ -62,21 +53,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
       items: [
         {
           id: 'dashboard',
-          label: 'Overview & Analytics',
-          shortLabel: 'Overview',
-          icon: <LayoutDashboard className="h-4 w-4" />,
-        },
-        {
-          id: 'reports',
           label: 'Monthly & Yearly Reports',
           shortLabel: 'Reports',
-          icon: <BarChart3 className="h-4 w-4" />,
-        },
-        {
-          id: 'balances',
-          label: 'Active Tenant Balances',
-          shortLabel: 'Balances',
-          icon: <WalletCards className="h-4 w-4" />,
+          icon: <LayoutDashboard className="h-4 w-4" stroke="rgb(0, 0, 0)" />,
         },
       ],
     },
@@ -84,26 +63,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
       label: 'Operations',
       items: [
         {
-          id: 'billing',
-          label: 'Rent Ledger',
-          shortLabel: 'Rent Ledger',
-          icon: <ReceiptText className="h-4 w-4" />,
-          badge: pendingPaymentsCount > 0 ? `${pendingPaymentsCount} due` : undefined,
-          badgeColor: 'text-sky-700 bg-sky-50 border-sky-200',
-        },
-        {
-          id: 'expenses',
-          label: 'Building Expenses',
-          shortLabel: 'Expenses',
-          icon: <Wallet className="h-4 w-4" />,
-          badge: pendingExpensesCount > 0 ? `${pendingExpensesCount}` : undefined,
-          badgeColor: 'text-rose-700 bg-rose-50 border-rose-200',
-        },
-        {
           id: 'maintenance',
-          label: 'Maintenance Tickets',
+          label: 'Maintenance',
           shortLabel: 'Maintenance',
-          icon: <Wrench className="h-4 w-4" />,
+          icon: <Wrench className="h-4 w-4" stroke="rgb(0, 0, 0)" />,
           badge: activeTicketsCount > 0 ? `${activeTicketsCount}` : undefined,
           badgeColor: 'text-blue-700 bg-blue-400/10 border-blue-400/20',
         },
@@ -111,7 +74,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           id: 'directory',
           label: 'Flats & Residents',
           shortLabel: 'Residents',
-          icon: <Users className="h-4 w-4" />,
+          icon: <Users className="h-4 w-4" stroke="rgb(0, 0, 0)" />,
           badge: `${activeTenantCount}`,
           badgeColor: 'text-slate-700 bg-slate-100 border-slate-300',
         },
@@ -128,6 +91,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
           badge: 'Sync',
           badgeColor: 'text-emerald-700 bg-emerald-500/10 border-emerald-500/20',
         },
+        {
+          id: 'billing',
+          label: 'Rent Ledger',
+          shortLabel: 'Rent Ledger',
+          icon: <ReceiptText className="h-4 w-4" stroke="rgb(0, 0, 0)" />,
+          badge: pendingPaymentsCount > 0 ? `${pendingPaymentsCount} due` : undefined,
+          badgeColor: 'text-sky-700 bg-sky-50 border-sky-200',
+        },
       ],
     },
   ];
@@ -137,7 +108,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <div className="hide-scrollbar flex h-full flex-col overflow-y-auto">
         <nav
           aria-label="Primary navigation"
-          className="hide-scrollbar flex gap-2 overflow-x-auto p-2 lg:block lg:space-y-6 lg:p-5"
+          className="hide-scrollbar flex gap-2 overflow-x-auto bg-blue-200 p-2 text-brand-blue lg:block lg:space-y-6 lg:p-5"
         >
           {navSections.map((section) => (
             <div key={section.label} className="contents lg:block">
@@ -161,7 +132,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       <span
                         className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition-colors ${
                           isActive
-                            ? 'bg-brand-accent text-white'
+                            ? item.id === 'dashboard'
+                              ? 'bg-transparent text-white'
+                              : 'bg-brand-accent text-white'
                             : 'bg-brand-surface/5 text-brand-border group-hover:bg-brand-surface/10 group-hover:text-white'
                         }`}
                       >

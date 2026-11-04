@@ -132,7 +132,7 @@ export const ExcelWorkbookView: React.FC = () => {
               </h2>
               <p className="mt-1 text-sm leading-relaxed text-slate-500">
                 The share link allows the workbook to be displayed. Microsoft
-                Graph authorization is required before EstateVolt can upload
+                Graph authorization is required before Rently can upload
                 the CSV data and future monthly updates.
               </p>
             </div>
@@ -175,7 +175,7 @@ export const ExcelWorkbookView: React.FC = () => {
           <p className="mx-auto mt-2 max-w-xl text-sm leading-relaxed text-slate-500">
             Sign in with the Microsoft account that owns or can edit the shared
             workbook. The first synchronization uploads the imported CSV and
-            all existing EstateVolt records.
+            all existing Rently records.
           </p>
           <button
             onClick={() => void connect()}
@@ -226,7 +226,7 @@ export const ExcelWorkbookView: React.FC = () => {
       <div className="overflow-hidden rounded-2xl border border-slate-200 bg-brand-surface">
         <div className="border-b border-slate-200 px-5 py-4">
           <p className="text-sm font-semibold text-slate-950">
-            EstateVolt Excel workbook
+            Rently Excel workbook
           </p>
           <p className="text-xs text-slate-400">
             Embedded from the provided OneDrive share link
@@ -234,7 +234,7 @@ export const ExcelWorkbookView: React.FC = () => {
         </div>
         <iframe
           key={lastSyncedAt?.toISOString() || "initial"}
-          title="EstateVolt Excel workbook"
+          title="Rently Excel workbook"
           src={embedUrl}
           className="h-[620px] w-full bg-brand-surface"
           allowFullScreen

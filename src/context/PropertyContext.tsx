@@ -14,6 +14,9 @@ import {
   BHAGAT_NIWAS_EXPENSES,
   BHAGAT_NIWAS_FLATS,
   BHAGAT_NIWAS_STATEMENTS,
+  migrateBhagatNiwasExpenses,
+  migrateBhagatNiwasFlats,
+  migrateBhagatNiwasStatements,
 } from '../data/bhagatNiwasData';
 
 interface PropertyContextType {
@@ -29,6 +32,22 @@ interface PropertyContextType {
   
   // Electricity & Billing Actions
   updateElectricityReading: (statementId: string, startReading: number, endReading: number) => void;
+  updateStatement: (
+    statementId: string,
+    changes: Partial<Pick<
+      FlatMonthlyStatement,
+      | 'paymentDate'
+      | 'tenantName'
+      | 'flatNumber'
+      | 'baseRent'
+      | 'electricityReceived'
+      | 'startReading'
+      | 'endReading'
+      | 'paymentReceived'
+      | 'balanceThisMonth'
+    >>
+  ) => void;
+  writeOffBalance: (statementId: string, reason?: string) => void;
   batchUpdateReadings: (updates: { statementId: string; endReading: number; startReading?: number }[]) => void;
   upsertRentStatement: (data: {
     flatId: string;
@@ -69,6 +88,7 @@ interface PropertyContextType {
   updateFlat: (flat: Flat) => void;
   deleteFlat: (flatId: string) => void;
   endLease: (flatId: string, leaseEndDate: string) => void;
+  leaveWithoutPaying: (flatId: string, leaseEndDate: string) => void;
   
   // Maintenance Actions
   addMaintenanceRequest: (request: Omit<MaintenanceRequest, 'id' | 'ticketNumber' | 'reportedDate'>) => void;
@@ -118,37 +138,84 @@ const parseSaved = <T,>(key: string, fallback: T): T => {
 export const PropertyProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   // Initialize Buildings
   const [buildings, setBuildings] = useState<Building[]>(() => {
-    const saved = parseSaved<Building[]>(STORAGE_KEYS.BUILDINGS, [BHAGAT_NIWAS_BUILDING]);
-    const bhagat = saved.find(building => building.id === BHAGAT_NIWAS_BUILDING.id);
-    return [bhagat || BHAGAT_NIWAS_BUILDING];
+    return parseSaved<Building[]>(STORAGE_KEYS.BUILDINGS, [BHAGAT_NIWAS_BUILDING]);
   });
 
   // Initialize Flats
   const [flats, setFlats] = useState<Flat[]>(() => {
-    return parseSaved<Flat[]>(STORAGE_KEYS.FLATS, BHAGAT_NIWAS_FLATS)
-      .filter(flat => flat.buildingId === BHAGAT_NIWAS_BUILDING.id);
+    return migrateBhagatNiwasFlats(
+      parseSaved<Flat[]>(STORAGE_KEYS.FLATS, BHAGAT_NIWAS_FLATS),
+    );
   });
 
   // Initialize Statements (Tenant Rent + Electricity + Previous Balance)
   const [statements, setStatements] = useState<FlatMonthlyStatement[]>(() => {
-    return parseSaved<FlatMonthlyStatement[]>(STORAGE_KEYS.STATEMENTS, BHAGAT_NIWAS_STATEMENTS)
-      .filter(statement => statement.buildingId === BHAGAT_NIWAS_BUILDING.id);
+    return migrateBhagatNiwasStatements(
+      parseSaved<FlatMonthlyStatement[]>(
+        STORAGE_KEYS.STATEMENTS,
+        BHAGAT_NIWAS_STATEMENTS,
+      ),
+    );
   });
 
   // Initialize Full Building Operating Expenses
   const [buildingExpenses, setBuildingExpenses] = useState<BuildingExpense[]>(() => {
-    return parseSaved<BuildingExpense[]>(STORAGE_KEYS.EXPENSES, BHAGAT_NIWAS_EXPENSES)
-      .filter(expense => expense.buildingId === BHAGAT_NIWAS_BUILDING.id);
+    return migrateBhagatNiwasExpenses(
+      parseSaved<BuildingExpense[]>(STORAGE_KEYS.EXPENSES, BHAGAT_NIWAS_EXPENSES),
+    );
   });
 
   // Initialize Maintenance Requests
   const [maintenanceRequests, setMaintenanceRequests] = useState<MaintenanceRequest[]>(() => {
-    return parseSaved<MaintenanceRequest[]>(STORAGE_KEYS.MAINTENANCE, [])
-      .filter(request => request.buildingId === BHAGAT_NIWAS_BUILDING.id);
+    return parseSaved<MaintenanceRequest[]>(STORAGE_KEYS.MAINTENANCE, []);
   });
 
   const [selectedBuildingId, setSelectedBuildingId] = useState<string>(BHAGAT_NIWAS_BUILDING.id);
   const [selectedMonth, setSelectedMonth] = useState<string>('2026-09');
+
+  const statusFor = (statement: FlatMonthlyStatement) => {
+    if (statement.balanceThisMonth <= 0) return 'PAID' as const;
+    if (statement.paymentReceived > 0) return 'PARTIAL' as const;
+    if (statement.lastMonthBalance > 0) return 'OVERDUE' as const;
+    return 'UNPAID' as const;
+  };
+
+  const carryBalanceForward = (
+    source: FlatMonthlyStatement[],
+    flatId: string,
+    changedMonth: string,
+  ) => {
+    const timeline = source
+      .filter(statement => statement.flatId === flatId && statement.month > changedMonth)
+      .sort((a, b) => a.month.localeCompare(b.month));
+    let previous = source.find(
+      statement => statement.flatId === flatId && statement.month === changedMonth,
+    );
+    if (!previous) return source;
+
+    const replacements = new Map<string, FlatMonthlyStatement>();
+    timeline.forEach(statement => {
+      const lastMonthBalance = previous?.balanceThisMonth || 0;
+      const totalDue = Number(
+        (lastMonthBalance + statement.baseRent + statement.electricityAmount).toFixed(2),
+      );
+      const writtenOffAmount = statement.writtenOffAmount || 0;
+      const balanceThisMonth = Number(
+        (totalDue - statement.paymentReceived - writtenOffAmount).toFixed(2),
+      );
+      const updated = {
+        ...statement,
+        lastMonthBalance,
+        totalDue,
+        balanceThisMonth,
+      };
+      const withStatus = { ...updated, status: statusFor(updated) };
+      replacements.set(statement.id, withStatus);
+      previous = withStatus;
+    });
+
+    return source.map(statement => replacements.get(statement.id) || statement);
+  };
 
   useEffect(() => {
     LEGACY_STORAGE_KEYS.forEach(key => localStorage.removeItem(key));
@@ -192,7 +259,9 @@ export const PropertyProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     
     // Total Due = Last Month Arrears + Current Base Rent + Current Electricity Bill
     const totalDue = Number((stmt.lastMonthBalance + stmt.baseRent + electricityAmount).toFixed(2));
-    const balanceThisMonth = Number((totalDue - stmt.paymentReceived).toFixed(2));
+    const balanceThisMonth = Number(
+      (totalDue - stmt.paymentReceived - (stmt.writtenOffAmount || 0)).toFixed(2),
+    );
 
     let status: 'PAID' | 'PARTIAL' | 'UNPAID' | 'OVERDUE' = 'UNPAID';
     if (balanceThisMonth <= 0) {
@@ -221,12 +290,90 @@ export const PropertyProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   // Update a single electricity reading
   const updateElectricityReading = (statementId: string, startReading: number, endReading: number) => {
-    setStatements(prev => prev.map(stmt => {
-      if (stmt.id === statementId) {
-        return recalculateStatement(stmt, startReading, endReading);
-      }
-      return stmt;
-    }));
+    setStatements(prev => {
+      const target = prev.find(statement => statement.id === statementId);
+      if (!target) return prev;
+      const updated = prev.map(statement =>
+        statement.id === statementId
+          ? recalculateStatement(statement, startReading, endReading)
+          : statement,
+      );
+      return carryBalanceForward(updated, target.flatId, target.month);
+    });
+  };
+
+  const updateStatement = (
+    statementId: string,
+    changes: Partial<Pick<
+      FlatMonthlyStatement,
+      | 'paymentDate'
+      | 'tenantName'
+      | 'flatNumber'
+      | 'baseRent'
+      | 'electricityReceived'
+      | 'startReading'
+      | 'endReading'
+      | 'paymentReceived'
+      | 'balanceThisMonth'
+    >>,
+  ) => {
+    setStatements(prev => {
+      const target = prev.find(statement => statement.id === statementId);
+      if (!target) return prev;
+      const startReading = changes.startReading ?? target.startReading;
+      const endReading = changes.endReading ?? target.endReading;
+      const totalReading = Math.max(0, Number((endReading - startReading).toFixed(2)));
+      const electricityAmount = Number(
+        (totalReading * target.ratePerUnit + target.fixedUtilityCharge).toFixed(2),
+      );
+      const baseRent = changes.baseRent ?? target.baseRent;
+      const totalDue = Number(
+        (target.lastMonthBalance + baseRent + electricityAmount).toFixed(2),
+      );
+      const paymentReceived = changes.paymentReceived ?? target.paymentReceived;
+      const calculatedBalance = Number(
+        (totalDue - paymentReceived - (target.writtenOffAmount || 0)).toFixed(2),
+      );
+      const balanceThisMonth = changes.balanceThisMonth ?? calculatedBalance;
+      const updatedTarget = {
+        ...target,
+        ...changes,
+        startReading,
+        endReading,
+        totalReading,
+        electricityAmount,
+        baseRent,
+        totalDue,
+        paymentReceived,
+        balanceThisMonth,
+      };
+      const withStatus = { ...updatedTarget, status: statusFor(updatedTarget) };
+      const updated = prev.map(statement =>
+        statement.id === statementId ? withStatus : statement,
+      );
+      return carryBalanceForward(updated, target.flatId, target.month);
+    });
+  };
+
+  const writeOffBalance = (statementId: string, reason?: string) => {
+    setStatements(prev => {
+      const target = prev.find(statement => statement.id === statementId);
+      if (!target || target.balanceThisMonth <= 0) return prev;
+      const updatedTarget: FlatMonthlyStatement = {
+        ...target,
+        writtenOffAmount: Number(
+          ((target.writtenOffAmount || 0) + target.balanceThisMonth).toFixed(2),
+        ),
+        writtenOffDate: new Date().toISOString().split('T')[0],
+        writtenOffReason: reason || 'Unrecoverable tenant balance',
+        balanceThisMonth: 0,
+        status: 'PAID',
+      };
+      const updated = prev.map(statement =>
+        statement.id === statementId ? updatedTarget : statement,
+      );
+      return carryBalanceForward(updated, target.flatId, target.month);
+    });
   };
 
   // Bulk / batch update electricity readings
@@ -256,16 +403,27 @@ export const PropertyProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   }) => {
     setStatements(prev => {
       const existingIdx = prev.findIndex(s => s.flatId === data.flatId && s.month === data.month);
+      const existing = existingIdx >= 0 ? prev[existingIdx] : undefined;
       const flat = flats.find(f => f.id === data.flatId);
-      const building = buildings.find(b => b.id === (flat?.buildingId || ''));
-      const buildingName = building?.name || 'Apartment Complex';
-      const flatNumber = flat?.flatNumber || '101';
-      const tenantName = flat?.tenantName || 'Resident';
-      const tenantPhone = flat?.tenantPhone || '';
-      const tenantEmail = flat?.tenantEmail || '';
-      const meterNumber = flat?.meterNumber || 'MTR-101';
-      const ratePerUnit = flat?.electricityRatePerUnit ?? building?.electricityRatePerUnit ?? 9.0;
-      const fixedUtilityCharge = flat?.fixedUtilityCharge ?? building?.fixedMeterCharge ?? 0;
+      const building = buildings.find(
+        b => b.id === (flat?.buildingId || existing?.buildingId || ''),
+      );
+      const buildingName = building?.name || existing?.buildingName || 'Apartment Complex';
+      const flatNumber = flat?.flatNumber || existing?.flatNumber || '101';
+      const tenantName = flat?.tenantName || existing?.tenantName || 'Resident';
+      const tenantPhone = flat?.tenantPhone || existing?.tenantPhone || '';
+      const tenantEmail = flat?.tenantEmail || existing?.tenantEmail || '';
+      const meterNumber = flat?.meterNumber || existing?.meterNumber || 'MTR-101';
+      const ratePerUnit =
+        flat?.electricityRatePerUnit ??
+        existing?.ratePerUnit ??
+        building?.electricityRatePerUnit ??
+        9.0;
+      const fixedUtilityCharge =
+        flat?.fixedUtilityCharge ??
+        existing?.fixedUtilityCharge ??
+        building?.fixedMeterCharge ??
+        0;
 
       const totalReading = Math.max(0, Number((data.endReading - data.startReading).toFixed(2)));
       const electricityAmount = Number((totalReading * ratePerUnit + fixedUtilityCharge).toFixed(2));
@@ -284,9 +442,8 @@ export const PropertyProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       }
 
       if (existingIdx >= 0) {
-        const existing = prev[existingIdx];
         const updated: FlatMonthlyStatement = {
-          ...existing,
+          ...existing!,
           baseRent: data.baseRent,
           startReading: data.startReading,
           endReading: data.endReading,
@@ -304,7 +461,7 @@ export const PropertyProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         };
         const next = [...prev];
         next[existingIdx] = updated;
-        return next;
+        return carryBalanceForward(next, existing!.flatId, existing!.month);
       } else {
         const newStmt: FlatMonthlyStatement = {
           id: `stmt-${data.flatId}-${data.month}-${Date.now()}`,
@@ -517,30 +674,44 @@ export const PropertyProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   const updateFlat = (flat: Flat) => {
-    setFlats(prev => prev.map(f => f.id === flat.id ? flat : f));
-    setStatements(prev => prev.map(stmt => {
-      if (stmt.flatId === flat.id && stmt.month >= flat.leaseStartDate.slice(0, 7)) {
-        const ratePerUnit = flat.electricityRatePerUnit ?? stmt.ratePerUnit;
-        const fixedUtilityCharge = flat.fixedUtilityCharge ?? stmt.fixedUtilityCharge;
-        const electricityAmount = Number((stmt.totalReading * ratePerUnit + fixedUtilityCharge).toFixed(2));
-        const totalDue = Number((stmt.lastMonthBalance + flat.baseRent + electricityAmount).toFixed(2));
-        const balanceThisMonth = Number((totalDue - stmt.paymentReceived).toFixed(2));
-        return {
-          ...stmt,
-          flatNumber: flat.flatNumber,
-          tenantName: flat.tenantName,
-          tenantPhone: flat.tenantPhone,
-          tenantEmail: flat.tenantEmail,
-          baseRent: flat.baseRent,
-          ratePerUnit,
-          fixedUtilityCharge,
-          electricityAmount,
-          totalDue,
-          balanceThisMonth,
-        };
-      }
-      return stmt;
-    }));
+    const normalizedFlat = {
+      ...flat,
+      leaseStatus: flat.isOccupied ? 'ACTIVE' as const : flat.leaseStatus || 'CLOSED' as const,
+    };
+    setFlats(prev => prev.map(f => f.id === flat.id ? normalizedFlat : f));
+    setStatements(prev => {
+      const updated = prev.map(stmt => {
+        if (stmt.flatId === normalizedFlat.id && stmt.month >= normalizedFlat.leaseStartDate.slice(0, 7)) {
+          const ratePerUnit = normalizedFlat.electricityRatePerUnit ?? stmt.ratePerUnit;
+          const fixedUtilityCharge = normalizedFlat.fixedUtilityCharge ?? stmt.fixedUtilityCharge;
+          const electricityAmount = Number((stmt.totalReading * ratePerUnit + fixedUtilityCharge).toFixed(2));
+          const totalDue = Number((stmt.lastMonthBalance + normalizedFlat.baseRent + electricityAmount).toFixed(2));
+          const balanceThisMonth = Number(
+            (totalDue - stmt.paymentReceived - (stmt.writtenOffAmount || 0)).toFixed(2),
+          );
+          const updatedStatement = {
+            ...stmt,
+            flatNumber: normalizedFlat.flatNumber,
+            tenantName: normalizedFlat.tenantName,
+            tenantPhone: normalizedFlat.tenantPhone,
+            tenantEmail: normalizedFlat.tenantEmail,
+            baseRent: normalizedFlat.baseRent,
+            ratePerUnit,
+            fixedUtilityCharge,
+            electricityAmount,
+            totalDue,
+            balanceThisMonth,
+          };
+          return { ...updatedStatement, status: statusFor(updatedStatement) };
+        }
+        return stmt;
+      });
+      const firstMonth = updated
+        .filter(statement => statement.flatId === normalizedFlat.id)
+        .map(statement => statement.month)
+        .sort()[0];
+      return firstMonth ? carryBalanceForward(updated, normalizedFlat.id, firstMonth) : updated;
+    });
   };
 
   const deleteFlat = (flatId: string) => {
@@ -550,7 +721,37 @@ export const PropertyProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const endLease = (flatId: string, leaseEndDate: string) => {
     setFlats(prev => prev.map(flat => flat.id === flatId
-      ? { ...flat, isOccupied: false, leaseEndDate }
+      ? { ...flat, isOccupied: false, leaseStatus: 'CLOSED', leaseEndDate }
+      : flat));
+  };
+
+  const leaveWithoutPaying = (flatId: string, leaseEndDate: string) => {
+    setStatements(prev => {
+      const latest = prev
+        .filter(statement => statement.flatId === flatId)
+        .sort((a, b) => b.month.localeCompare(a.month))[0];
+      if (!latest || latest.balanceThisMonth <= 0) return prev;
+      const lostAmount = latest.balanceThisMonth;
+      const updatedTarget: FlatMonthlyStatement = {
+        ...latest,
+        writtenOffAmount: Number(((latest.writtenOffAmount || 0) + lostAmount).toFixed(2)),
+        writtenOffDate: leaseEndDate,
+        writtenOffReason: 'Tenant left without paying',
+        balanceThisMonth: 0,
+        status: 'PAID',
+      };
+      const updated = prev.map(statement =>
+        statement.id === latest.id ? updatedTarget : statement,
+      );
+      return carryBalanceForward(updated, flatId, latest.month);
+    });
+    setFlats(prev => prev.map(flat => flat.id === flatId
+      ? {
+          ...flat,
+          isOccupied: false,
+          leaseStatus: 'LEFT_WITHOUT_PAYING',
+          leaseEndDate,
+        }
       : flat));
   };
 
@@ -667,12 +868,12 @@ export const PropertyProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       'Building Name',
       'Billing Month',
       'Category',
+      'Expense Type',
       'Title / Description',
-      'Vendor / Agency',
+      'Meter Number',
+      'Meter Reading',
       'Amount (INR)',
       'Date',
-      'Status',
-      'Invoice / Receipt Ref',
       'Notes'
     ];
 
@@ -680,12 +881,12 @@ export const PropertyProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       `"${e.buildingName}"`,
       `"${e.month}"`,
       `"${e.category}"`,
+      `"${e.expenseType || 'EXPENSE'}"`,
       `"${e.title.replace(/"/g, '""')}"`,
-      `"${e.vendor.replace(/"/g, '""')}"`,
+      `"${e.meterNumber || ''}"`,
+      e.meterReading ?? '',
       e.amount,
       e.date,
-      e.status,
-      `"${e.invoiceRef || ''}"`,
       `"${(e.notes || '').replace(/"/g, '""')}"`
     ]);
 
@@ -760,6 +961,8 @@ export const PropertyProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       selectedMonth,
       setSelectedMonth,
       updateElectricityReading,
+      updateStatement,
+      writeOffBalance,
       batchUpdateReadings,
       upsertRentStatement,
       recordPayment,
@@ -773,6 +976,7 @@ export const PropertyProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       updateFlat,
       deleteFlat,
       endLease,
+      leaveWithoutPaying,
       addMaintenanceRequest,
       updateMaintenanceStatus,
       resetToSampleData,

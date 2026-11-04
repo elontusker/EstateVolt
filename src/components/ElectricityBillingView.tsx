@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useProperty } from '../context/PropertyContext';
+import { formatMonth } from '../utils/formatMonth';
 import { FlatMonthlyStatement } from '../types';
 import { Button } from './ui/Primitives';
 import {
@@ -7,7 +8,6 @@ import {
   Filter,
   Zap,
   Receipt,
-  CreditCard,
   ArrowUpDown,
   Edit3,
   CheckCircle2,
@@ -15,23 +15,18 @@ import {
   Clock,
   Download,
   SlidersHorizontal,
-  FileText,
-  Plus,
   Gauge,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  CircleOff,
 } from 'lucide-react';
 
 interface ElectricityBillingViewProps {
-  onSelectStatementForInvoice: (statement: FlatMonthlyStatement) => void;
-  onSelectStatementForPayment: (statement: FlatMonthlyStatement) => void;
   onOpenBatchReadings: () => void;
   onOpenAddRent: (statement?: FlatMonthlyStatement) => void;
 }
 
 export const ElectricityBillingView: React.FC<ElectricityBillingViewProps> = ({
-  onSelectStatementForInvoice,
-  onSelectStatementForPayment,
   onOpenBatchReadings,
   onOpenAddRent,
 }) => {
@@ -40,7 +35,8 @@ export const ElectricityBillingView: React.FC<ElectricityBillingViewProps> = ({
     buildings,
     selectedBuildingId,
     selectedMonth,
-    updateElectricityReading,
+    updateStatement,
+    writeOffBalance,
     exportToCSV
   } = useProperty();
 
@@ -49,11 +45,26 @@ export const ElectricityBillingView: React.FC<ElectricityBillingViewProps> = ({
   const [sortBy, setSortBy] = useState<'flat' | 'balance' | 'consumption' | 'due'>('flat');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [showDetails, setShowDetails] = useState(false);
+  const [historyScope, setHistoryScope] = useState<'MONTH' | 'YEAR' | 'ALL'>('MONTH');
+  const [historyYear, setHistoryYear] = useState(selectedMonth.slice(0, 4));
+  const [tenantFilter, setTenantFilter] = useState('ALL');
 
   // Inline editing state for meter readings
   const [editingStatementId, setEditingStatementId] = useState<string | null>(null);
   const [editStartReading, setEditStartReading] = useState<number>(0);
   const [editEndReading, setEditEndReading] = useState<number>(0);
+  const [editPayment, setEditPayment] = useState<number>(0);
+  const [editBalance, setEditBalance] = useState<number>(0);
+  const [editPaymentDate, setEditPaymentDate] = useState('');
+
+  const availableYears = useMemo(
+    () => Array.from(new Set(statements.map(statement => statement.month.slice(0, 4)))).sort((a, b) => b.localeCompare(a)),
+    [statements],
+  );
+  const availableTenants = useMemo(
+    () => Array.from(new Set(statements.map(statement => statement.tenantName))).sort(),
+    [statements],
+  );
 
   const activeBuilding = buildings.find(b => b.id === selectedBuildingId);
   const currency = activeBuilding ? activeBuilding.currency : '₹';
@@ -65,9 +76,9 @@ export const ElectricityBillingView: React.FC<ElectricityBillingViewProps> = ({
         if (selectedBuildingId !== 'all' && stmt.buildingId !== selectedBuildingId) {
           return false;
         }
-        if (stmt.month !== selectedMonth) {
-          return false;
-        }
+        if (historyScope === 'MONTH' && stmt.month !== selectedMonth) return false;
+        if (historyScope === 'YEAR' && !stmt.month.startsWith(`${historyYear}-`)) return false;
+        if (tenantFilter !== 'ALL' && stmt.tenantName !== tenantFilter) return false;
         if (statusFilter !== 'ALL' && stmt.status !== statusFilter) {
           return false;
         }
@@ -95,7 +106,7 @@ export const ElectricityBillingView: React.FC<ElectricityBillingViewProps> = ({
         }
         return sortOrder === 'asc' ? diff : -diff;
       });
-  }, [statements, selectedBuildingId, selectedMonth, statusFilter, searchTerm, sortBy, sortOrder]);
+  }, [statements, selectedBuildingId, selectedMonth, historyScope, historyYear, tenantFilter, statusFilter, searchTerm, sortBy, sortOrder]);
 
   // Summary statistics for current filtered set
   const summary = useMemo(() => {
@@ -137,6 +148,9 @@ export const ElectricityBillingView: React.FC<ElectricityBillingViewProps> = ({
     setEditingStatementId(stmt.id);
     setEditStartReading(stmt.startReading);
     setEditEndReading(stmt.endReading);
+    setEditPayment(stmt.paymentReceived);
+    setEditBalance(stmt.balanceThisMonth);
+    setEditPaymentDate(stmt.paymentDate || stmt.billingDate || `${stmt.month}-01`);
   };
 
   const handleSaveEdit = (stmtId: string) => {
@@ -144,7 +158,13 @@ export const ElectricityBillingView: React.FC<ElectricityBillingViewProps> = ({
       alert('Month End Reading cannot be less than Month Start Reading.');
       return;
     }
-    updateElectricityReading(stmtId, editStartReading, editEndReading);
+    updateStatement(stmtId, {
+      startReading: editStartReading,
+      endReading: editEndReading,
+      paymentReceived: editPayment,
+      balanceThisMonth: editBalance,
+      paymentDate: editPaymentDate,
+    });
     setEditingStatementId(null);
   };
 
@@ -356,6 +376,38 @@ export const ElectricityBillingView: React.FC<ElectricityBillingViewProps> = ({
           ))}
         </div>
 
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            value={historyScope}
+            onChange={(event) => setHistoryScope(event.target.value as 'MONTH' | 'YEAR' | 'ALL')}
+            className="rounded-lg border border-slate-300 bg-slate-100 px-2.5 py-1.5 text-xs text-slate-950"
+            aria-label="Ledger history period"
+          >
+            <option value="MONTH">Selected month · {formatMonth(selectedMonth)}</option>
+            <option value="YEAR">Full year</option>
+            <option value="ALL">Overall history</option>
+          </select>
+          {historyScope === 'YEAR' && (
+            <select
+              value={historyYear}
+              onChange={(event) => setHistoryYear(event.target.value)}
+              className="rounded-lg border border-slate-300 bg-slate-100 px-2.5 py-1.5 text-xs text-slate-950"
+              aria-label="Ledger year"
+            >
+              {availableYears.map(year => <option key={year} value={year}>{year}</option>)}
+            </select>
+          )}
+          <select
+            value={tenantFilter}
+            onChange={(event) => setTenantFilter(event.target.value)}
+            className="max-w-48 rounded-lg border border-slate-300 bg-slate-100 px-2.5 py-1.5 text-xs text-slate-950"
+            aria-label="Ledger tenant"
+          >
+            <option value="ALL">All tenants</option>
+            {availableTenants.map(tenant => <option key={tenant} value={tenant}>{tenant}</option>)}
+          </select>
+        </div>
+
         {/* Sort Controls */}
         <div className="flex items-center gap-2 text-xs text-slate-500">
           <SlidersHorizontal className="w-3.5 h-3.5" />
@@ -381,64 +433,56 @@ export const ElectricityBillingView: React.FC<ElectricityBillingViewProps> = ({
 
       </div>
 
-      {/* The Core Table with EXACT 18 Columns matching Reference CSV */}
+      {/* Compact ledger table */}
       {showDetails && <div className="rounded-xl border border-slate-200 bg-brand-surface/95 overflow-hidden shadow-sm">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs border-collapse">
+        <div className="overflow-hidden">
+          <table className="w-full table-fixed text-left text-xs border-collapse">
             <thead>
               <tr className="bg-slate-100/90 text-slate-700 border-b border-slate-200 text-[11px] font-semibold tracking-wider">
-                <th className="py-3 px-3.5 whitespace-nowrap">Building Name</th>
-                <th className="py-3 px-3 whitespace-nowrap">Flat Number</th>
-                <th className="py-3 px-3.5 whitespace-nowrap">Tenant Name</th>
-                <th className="py-3 px-3 whitespace-nowrap font-mono text-slate-500">Billing Month</th>
-                <th className="py-3 px-3 whitespace-nowrap font-mono text-slate-500">Payment Date</th>
-                <th className="py-3 px-3 text-right whitespace-nowrap bg-slate-100/90">
+                <th className="py-3 px-2">Flat</th>
+                <th className="py-3 px-2">Tenant</th>
+                <th className="py-3 px-2 font-mono text-slate-500">Payment Date</th>
+                <th className="py-3 px-2 text-right bg-slate-100/90">
                   Start Reading (kWh)
                 </th>
-                <th className="py-3 px-3 text-right whitespace-nowrap bg-slate-100/90 text-sky-700 font-bold">
+                <th className="py-3 px-2 text-right bg-slate-100/90 text-sky-700 font-bold">
                   End Reading (kWh)
                 </th>
-                <th className="py-3 px-3 text-right whitespace-nowrap bg-slate-100/90 text-sky-700 font-bold">
+                <th className="py-3 px-2 text-right bg-slate-100/90 text-sky-700 font-bold">
                   Total Reading (kWh)
                 </th>
-                <th className="py-3 px-2.5 text-right whitespace-nowrap text-slate-500 font-mono">
-                  Rate Per Unit
-                </th>
-                <th className="py-3 px-2.5 text-right whitespace-nowrap text-slate-500 font-mono">
-                  Fixed Meter Fee
-                </th>
-                <th className="py-3 px-3 text-right whitespace-nowrap text-emerald-700 font-bold">
+                <th className="py-3 px-2 text-right text-emerald-700 font-bold">
                   Electricity Cost
                 </th>
-                <th className="py-3 px-3 text-right whitespace-nowrap font-semibold text-slate-800">
+                <th className="py-3 px-2 text-right font-semibold text-slate-800">
                   Rent
                 </th>
-                <th className="py-3 px-3 text-right whitespace-nowrap text-slate-500">
+                <th className="py-3 px-2 text-right text-slate-500">
                   Last Month Balance
                 </th>
-                <th className="py-3 px-3.5 text-right whitespace-nowrap font-bold text-slate-950 bg-slate-100/90 border-x border-slate-300/70">
+                <th className="py-3 px-2 text-right font-bold text-slate-950 bg-slate-100/90 border-x border-slate-300/70">
                   <div className="flex flex-col items-end">
                     <span>Total Amount</span>
                     <span className="text-[10px] text-slate-500 font-normal font-sans">(Rent + Elec Bill + Last Month Balance)</span>
                   </div>
                 </th>
-                <th className="py-3 px-3 text-right whitespace-nowrap text-emerald-700 font-semibold">
+                <th className="py-3 px-2 text-right text-emerald-700 font-semibold">
                   Payment
                 </th>
-                <th className="py-3 px-3.5 text-right whitespace-nowrap font-bold text-rose-600 bg-slate-100/90 border-l border-slate-300/70">
+                <th className="py-3 px-2 text-right font-bold text-rose-600 bg-slate-100/90 border-l border-slate-300/70">
                   <div className="flex flex-col items-end">
                     <span>Balance</span>
                     <span className="text-[10px] text-rose-500 font-normal font-sans">(Total Amount - Payment)</span>
                   </div>
                 </th>
-                <th className="py-3 px-3 text-center whitespace-nowrap">Status</th>
-                <th className="py-3 px-3.5 text-center whitespace-nowrap bg-slate-100/70">Actions</th>
+                <th className="py-3 px-2 text-center">Status</th>
+                <th className="py-3 px-2 text-center bg-slate-100/70">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 font-mono">
               {filteredStatements.length === 0 ? (
                 <tr>
-                  <td colSpan={18} className="py-12 text-center text-slate-500 font-sans">
+                  <td colSpan={14} className="py-12 text-center text-slate-500 font-sans">
                     <p className="text-sm font-medium">No flat records match your search or filter.</p>
                   </td>
                 </tr>
@@ -454,30 +498,25 @@ export const ElectricityBillingView: React.FC<ElectricityBillingViewProps> = ({
                         stmt.balanceThisMonth > 0 ? 'bg-slate-50/80' : 'bg-slate-50/60'
                       }`}
                     >
-                      {/* 1. Building Name */}
-                      <td className="py-2.5 px-3.5 font-sans font-medium text-slate-800 whitespace-nowrap">
-                        {stmt.buildingName}
-                      </td>
-
-                      {/* 2. Flat Number */}
-                      <td className="py-2.5 px-3 whitespace-nowrap font-bold text-slate-950">
+                      <td className="py-2.5 px-2 font-bold text-slate-950">
                         <span className="px-2 py-0.5 rounded bg-slate-100 border border-slate-300 text-slate-900">
                           #{stmt.flatNumber}
                         </span>
                       </td>
 
-                      {/* 3. Tenant Name */}
-                      <td className="py-2.5 px-3.5 font-sans text-slate-800 whitespace-nowrap">
-                        <div className="font-medium text-slate-950">{stmt.tenantName}</div>
+                      <td className="py-2.5 px-2 font-sans text-slate-800">
+                        <div className="break-words font-medium text-slate-950">{stmt.tenantName}</div>
                       </td>
 
-                      {/* 4. Billing Month */}
-                      <td className="py-2.5 px-3 whitespace-nowrap text-slate-500 font-mono text-[11px]">
-                        {stmt.month}
-                      </td>
-
-                      <td className="py-2.5 px-3 whitespace-nowrap text-slate-500 font-mono text-[11px]">
-                        {stmt.paymentDate || stmt.billingDate || `${stmt.month}-01`}
+                      <td className="py-2.5 px-2 text-slate-500 font-mono text-[11px]">
+                        {isEditing ? (
+                          <input
+                            type="date"
+                            value={editPaymentDate}
+                            onChange={(event) => setEditPaymentDate(event.target.value)}
+                            className="w-full rounded border border-slate-300 bg-slate-100 px-1 py-1 text-[10px]"
+                          />
+                        ) : stmt.paymentDate || stmt.billingDate || `${stmt.month}-01`}
                       </td>
 
                       {/* 6. Start Reading (kWh) */}
@@ -525,16 +564,6 @@ export const ElectricityBillingView: React.FC<ElectricityBillingViewProps> = ({
                         )}
                       </td>
 
-                      {/* 9. Rate Per Unit */}
-                      <td className="py-2.5 px-2.5 text-right tabular-nums whitespace-nowrap text-slate-500 text-[11px]">
-                        {stmt.ratePerUnit}
-                      </td>
-
-                      {/* 10. Fixed Meter Fee */}
-                      <td className="py-2.5 px-2.5 text-right tabular-nums whitespace-nowrap text-slate-500 text-[11px]">
-                        {stmt.fixedUtilityCharge}
-                      </td>
-
                       {/* 11. Electricity Cost */}
                       <td className="py-2.5 px-3 text-right tabular-nums whitespace-nowrap text-emerald-700 font-bold">
                         {isEditing ? (
@@ -577,17 +606,18 @@ export const ElectricityBillingView: React.FC<ElectricityBillingViewProps> = ({
 
                       {/* 15. Payment */}
                       <td className="py-2.5 px-3 text-right tabular-nums whitespace-nowrap text-emerald-700 font-semibold">
-                        <button
-                          onClick={() => onSelectStatementForPayment(stmt)}
-                          className="hover:underline font-bold focus:outline-none cursor-pointer group inline-flex items-center gap-1 justify-end"
-                          title="Click to record/update payment"
-                        >
-                          {stmt.paymentReceived > 0 ? (
-                            <span>{currency}{stmt.paymentReceived.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                          ) : (
-                            <span className="text-slate-400 font-normal">0.00</span>
-                          )}
-                        </button>
+                        {isEditing ? (
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={editPayment}
+                            onChange={(event) => setEditPayment(Number(event.target.value))}
+                            className="w-full rounded border border-slate-300 bg-slate-100 px-1 py-1 text-right text-xs"
+                          />
+                        ) : (
+                          <span>{currency}{stmt.paymentReceived.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                        )}
                       </td>
 
                       {/* 16. Balance (Total Amount - Payment) */}
@@ -599,9 +629,13 @@ export const ElectricityBillingView: React.FC<ElectricityBillingViewProps> = ({
                           : 'text-emerald-700'
                       }`}>
                         {isEditing ? (
-                          <span>
-                            {currency}{(((Math.max(0, editEndReading - editStartReading) * stmt.ratePerUnit + stmt.fixedUtilityCharge) + stmt.baseRent + stmt.lastMonthBalance) - stmt.paymentReceived).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                          </span>
+                          <input
+                            type="number"
+                            step="0.01"
+                            value={editBalance}
+                            onChange={(event) => setEditBalance(Number(event.target.value))}
+                            className="w-full rounded border border-slate-300 bg-slate-100 px-1 py-1 text-right text-xs"
+                          />
                         ) : (
                           <span>{currency}{stmt.balanceThisMonth.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                         )}
@@ -631,6 +665,13 @@ export const ElectricityBillingView: React.FC<ElectricityBillingViewProps> = ({
                           </div>
                         ) : (
                           <div className="flex items-center justify-center gap-1.5">
+                            <button
+                              onClick={() => handleStartEdit(stmt)}
+                              className="p-1.5 text-slate-700 hover:bg-slate-100 hover:text-slate-950 rounded transition-colors"
+                              title="Edit payment date, readings, payment, and balance"
+                            >
+                              <Edit3 className="h-3.5 w-3.5" />
+                            </button>
 
                             {/* Explicit "Add / Edit Rent" button on every row */}
                             <button
@@ -642,23 +683,20 @@ export const ElectricityBillingView: React.FC<ElectricityBillingViewProps> = ({
                               <span>Add Rent</span>
                             </button>
 
-                            {/* Record Payment Button */}
-                            <button
-                              onClick={() => onSelectStatementForPayment(stmt)}
-                              className="p-1.5 text-slate-700 hover:text-emerald-700 hover:bg-slate-100 rounded transition-colors cursor-pointer"
-                              title="Record Resident Payment"
-                            >
-                              <CreditCard className="w-3.5 h-3.5" />
-                            </button>
-
-                            {/* View / Print Invoice Button */}
-                            <button
-                              onClick={() => onSelectStatementForInvoice(stmt)}
-                              className="p-1.5 text-slate-700 hover:text-slate-950 hover:bg-slate-100 rounded transition-colors cursor-pointer"
-                              title="Generate Itemized Bill & Receipt"
-                            >
-                              <FileText className="w-3.5 h-3.5 text-blue-700" />
-                            </button>
+                            {stmt.balanceThisMonth > 0 && (
+                              <button
+                                onClick={() => {
+                                  const reason = prompt('Reason for reporting this balance as lost', 'Tenant left without settling the balance');
+                                  if (reason !== null && confirm(`Write off ${currency}${stmt.balanceThisMonth.toFixed(2)} for ${stmt.tenantName}?`)) {
+                                    writeOffBalance(stmt.id, reason);
+                                  }
+                                }}
+                                className="p-1.5 text-rose-600 hover:bg-rose-50 rounded transition-colors cursor-pointer"
+                                title="Report outstanding balance as lost"
+                              >
+                                <CircleOff className="w-3.5 h-3.5" />
+                              </button>
+                            )}
                           </div>
                         )}
                       </td>
@@ -667,42 +705,6 @@ export const ElectricityBillingView: React.FC<ElectricityBillingViewProps> = ({
                 })
               )}
             </tbody>
-            {filteredStatements.length > 0 && (
-              <tfoot className="border-t-2 border-slate-300 bg-brand-surface/95 text-slate-800 text-xs font-mono font-bold">
-                <tr>
-                  <td colSpan={7} className="py-3 px-3.5 text-left font-sans text-slate-500">
-                    Grand Totals ({filteredStatements.length} flats):
-                  </td>
-                  <td className="py-3 px-3 text-right text-sky-700 tabular-nums">
-                    {summary.totalKwh.toLocaleString()}
-                  </td>
-                  <td colSpan={2} className="py-3 px-2 text-center text-slate-400 font-sans text-[11px]">
-                    -
-                  </td>
-                  <td className="py-3 px-3 text-right text-emerald-700 tabular-nums">
-                    {currency}{summary.totalElectricityBilled.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                  </td>
-                  <td className="py-3 px-3 text-right text-slate-950 tabular-nums">
-                    {currency}{summary.totalRentBilled.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                  </td>
-                  <td className="py-3 px-3 text-right text-sky-700 tabular-nums">
-                    {currency}{summary.totalLastMonthBalance.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                  </td>
-                  <td className="py-3 px-3.5 text-right text-slate-950 tabular-nums bg-slate-100/90 border-x border-slate-300/70">
-                    {currency}{summary.totalGrossDue.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                  </td>
-                  <td className="py-3 px-3 text-right text-emerald-700 tabular-nums">
-                    {currency}{summary.totalPaid.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                  </td>
-                  <td className="py-3 px-3.5 text-right text-rose-600 tabular-nums bg-slate-100/90 border-l border-slate-300/70">
-                    {currency}{summary.totalBalanceThisMonth.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                  </td>
-                  <td colSpan={2} className="py-3 px-3 text-center text-[11px] text-slate-500 font-sans">
-                    {summary.collectionRate.toFixed(1)}% Collected
-                  </td>
-                </tr>
-              </tfoot>
-            )}
           </table>
         </div>
 

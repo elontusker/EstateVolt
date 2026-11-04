@@ -1,22 +1,18 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useProperty } from '../context/PropertyContext';
-import { FlatMonthlyStatement, Flat, Building } from '../types';
+import { Flat, FlatMonthlyStatement } from '../types';
 import { Button } from './ui/Primitives';
 import {
   Building2,
   User,
   Calendar,
   Zap,
-  DollarSign,
   Receipt,
-  CreditCard,
-  ArrowRight,
   Check,
   X,
-  Sparkles,
   AlertCircle,
-  HelpCircle,
   Clock,
+  Search,
   FileText,
   Paperclip,
   Trash2
@@ -54,7 +50,9 @@ export const AddRentModal: React.FC<AddRentModalProps> = ({
     upsertRentStatement
   } = useProperty();
 
-  const targetMonth = preSelectedStatement?.month || selectedMonth || '2026-09';
+  const [targetMonth, setTargetMonth] = useState(
+    preSelectedStatement?.month || selectedMonth || '2026-09',
+  );
 
   // Flat selection
   const [selectedFlatId, setSelectedFlatId] = useState<string>(() => {
@@ -65,10 +63,35 @@ export const AddRentModal: React.FC<AddRentModalProps> = ({
     }
     return flats[0]?.id || '';
   });
+  const [tenantSearch, setTenantSearch] = useState('');
+  const [isTenantSearchOpen, setIsTenantSearchOpen] = useState(false);
 
   const activeFlat = useMemo(() => {
-    return flats.find(f => f.id === selectedFlatId) || flats[0];
-  }, [flats, selectedFlatId]);
+    const currentFlat = flats.find(f => f.id === selectedFlatId);
+    const periodStatement = statements.find(
+      statement =>
+        statement.flatId === selectedFlatId &&
+        statement.month === targetMonth,
+    );
+    if (!periodStatement) return currentFlat || flats[0];
+    return {
+      ...(currentFlat || {
+        id: periodStatement.flatId,
+        buildingId: periodStatement.buildingId,
+        floor: 0,
+        isOccupied: true,
+        leaseStartDate: `${periodStatement.month}-01`,
+      }),
+      flatNumber: periodStatement.flatNumber,
+      tenantName: periodStatement.tenantName,
+      tenantPhone: periodStatement.tenantPhone,
+      tenantEmail: periodStatement.tenantEmail,
+      baseRent: periodStatement.baseRent,
+      meterNumber: periodStatement.meterNumber,
+      electricityRatePerUnit: periodStatement.ratePerUnit,
+      fixedUtilityCharge: periodStatement.fixedUtilityCharge,
+    } as Flat;
+  }, [flats, selectedFlatId, statements, targetMonth]);
 
   const activeBuilding = useMemo(() => {
     if (!activeFlat) return buildings[0];
@@ -110,6 +133,91 @@ export const AddRentModal: React.FC<AddRentModalProps> = ({
     preSelectedStatement?.attachment
   );
   const [attachmentError, setAttachmentError] = useState('');
+  const searchableFlats = useMemo(() => {
+    const query = tenantSearch.trim().toLowerCase();
+    const periodFlats = new Map<string, Flat>();
+
+    flats
+      .filter(flat => {
+        const leaseStartMonth = flat.leaseStartDate.slice(0, 7);
+        const leaseEndMonth = flat.leaseEndDate?.slice(0, 7);
+        return (
+          !flat.isCommonArea &&
+          leaseStartMonth <= targetMonth &&
+          (!leaseEndMonth || leaseEndMonth >= targetMonth)
+        );
+      })
+      .forEach(flat => periodFlats.set(flat.id, flat));
+
+    statements
+      .filter(statement => {
+        if (statement.month !== targetMonth) return false;
+        return (
+          selectedBuildingId === 'all' ||
+          statement.buildingId === selectedBuildingId
+        );
+      })
+      .forEach(statement => {
+        const currentFlat = flats.find(flat => flat.id === statement.flatId);
+        periodFlats.set(statement.flatId, {
+          ...(currentFlat || {
+            id: statement.flatId,
+            buildingId: statement.buildingId,
+            floor: 0,
+            isOccupied: true,
+            leaseStartDate: `${statement.month}-01`,
+          }),
+          flatNumber: statement.flatNumber,
+          tenantName: statement.tenantName,
+          tenantPhone: statement.tenantPhone,
+          tenantEmail: statement.tenantEmail,
+          baseRent: statement.baseRent,
+          meterNumber: statement.meterNumber,
+          electricityRatePerUnit: statement.ratePerUnit,
+          fixedUtilityCharge: statement.fixedUtilityCharge,
+        } as Flat);
+      });
+
+    return Array.from(periodFlats.values())
+      .filter(
+        flat =>
+          selectedBuildingId === 'all' ||
+          flat.buildingId === selectedBuildingId,
+      )
+      .filter((flat) => {
+        if (!query) return true;
+        const building = buildings.find(item => item.id === flat.buildingId);
+        return [flat.tenantName, flat.flatNumber, flat.tenantPhone, building?.name || '']
+          .some(value => value.toLowerCase().includes(query));
+      })
+      .slice(0, 12);
+  }, [
+    buildings,
+    flats,
+    selectedBuildingId,
+    statements,
+    targetMonth,
+    tenantSearch,
+  ]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const month = preSelectedStatement?.month || selectedMonth || '2026-09';
+    setTargetMonth(month);
+    setPaymentDate(
+      preSelectedStatement?.paymentDate ||
+        preSelectedStatement?.billingDate ||
+        `${month}-01`,
+    );
+  }, [isOpen, preSelectedStatement, selectedMonth]);
+
+  useEffect(() => {
+    if (!isOpen || searchableFlats.length === 0) return;
+    if (!searchableFlats.some(flat => flat.id === selectedFlatId)) {
+      setSelectedFlatId(searchableFlats[0].id);
+      setTenantSearch('');
+    }
+  }, [isOpen, searchableFlats, selectedFlatId]);
 
   // Sync inputs when flat or targetMonth changes
   useEffect(() => {
@@ -119,7 +227,6 @@ export const AddRentModal: React.FC<AddRentModalProps> = ({
       setCurrentEndReading(preSelectedStatement.endReading);
       setLastMonthBalance(preSelectedStatement.lastMonthBalance);
       setPaymentAmount(preSelectedStatement.paymentReceived);
-      setPaymentDate(preSelectedStatement.paymentDate || preSelectedStatement.billingDate || `${targetMonth}-01`);
       setAttachment(preSelectedStatement.attachment);
       return;
     }
@@ -131,7 +238,6 @@ export const AddRentModal: React.FC<AddRentModalProps> = ({
       setCurrentEndReading(existingStatement.endReading);
       setLastMonthBalance(existingStatement.lastMonthBalance);
       setPaymentAmount(existingStatement.paymentReceived);
-      setPaymentDate(existingStatement.paymentDate || existingStatement.billingDate || `${targetMonth}-01`);
       setAttachment(existingStatement.attachment);
     } else {
       // Automatically prefetch from previous month data:
@@ -152,7 +258,6 @@ export const AddRentModal: React.FC<AddRentModalProps> = ({
 
       // 5. Payment default
       setPaymentAmount(0);
-      setPaymentDate(`${targetMonth}-01`);
       setAttachment(undefined);
     }
     setIsStartReadingEditable(false);
@@ -177,12 +282,10 @@ export const AddRentModal: React.FC<AddRentModalProps> = ({
   const handleAttachment = (file?: File) => {
     setAttachmentError('');
     if (!file) return;
-
     if (file.size > 1024 * 1024) {
       setAttachmentError('Please choose a file smaller than 1 MB.');
       return;
     }
-
     const reader = new FileReader();
     reader.onload = () => {
       setAttachment({
@@ -267,31 +370,62 @@ export const AddRentModal: React.FC<AddRentModalProps> = ({
         {/* Modal Scrollable Body */}
         <form onSubmit={handleSubmit} className="overflow-y-auto flex-1 p-6 space-y-5 text-xs">
 
-          {/* Top Row: Tenant Dropdown & Payment Date */}
+          {/* Top Row: searchable tenant selector & payment date */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
 
-            {/* 1. Tenant Dropdown Selector */}
             <div className="sm:col-span-2">
               <label className="text-slate-700 font-semibold block mb-1 flex items-center gap-1.5">
                 <User className="w-3.5 h-3.5 text-emerald-700" />
-                <span>Select Tenant / Flat (From Dropdown)</span>
+                <span>Search and select tenant or flat</span>
               </label>
-              <select
-                value={selectedFlatId}
-                onChange={(e) => setSelectedFlatId(e.target.value)}
-                className="w-full px-3 py-2.5 bg-slate-100 border border-slate-300 rounded-lg text-slate-950 font-medium focus:outline-none focus:border-sky-500 cursor-pointer"
-              >
-                {flats
-                  .filter((flat) => flat.isOccupied || preSelectedStatement?.flatId === flat.id)
-                  .map((flat) => {
-                    const bld = buildings.find(b => b.id === flat.buildingId);
-                    return (
-                      <option key={flat.id} value={flat.id} className="bg-brand-surface text-slate-950">
-                        {flat.tenantName} — Flat #{flat.flatNumber} ({bld?.name || 'Building'})
-                      </option>
-                    );
-                  })}
-              </select>
+              <div className="relative">
+                <Search className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
+                <input
+                  type="search"
+                  value={tenantSearch}
+                  onFocus={() => setIsTenantSearchOpen(true)}
+                  onChange={(event) => {
+                    setTenantSearch(event.target.value);
+                    setIsTenantSearchOpen(true);
+                  }}
+                  placeholder={activeFlat
+                    ? `${activeFlat.tenantName} — Flat #${activeFlat.flatNumber}`
+                    : 'Search name, flat, phone, or building'}
+                  className="w-full rounded-lg border border-slate-300 bg-slate-100 py-2.5 pl-9 pr-3 font-medium text-slate-950 outline-none focus:border-sky-500"
+                />
+                {isTenantSearchOpen && (
+                  <div className="absolute z-20 mt-1 max-h-56 w-full overflow-y-auto rounded-lg border border-slate-300 bg-brand-surface p-1 shadow-xl">
+                    {searchableFlats.length ? searchableFlats.map((flat) => {
+                      const building = buildings.find(item => item.id === flat.buildingId);
+                      return (
+                        <Button
+                          key={flat.id}
+                          type="button"
+                          onClick={() => {
+                            setSelectedFlatId(flat.id);
+                            setTenantSearch(`${flat.tenantName} — Flat #${flat.flatNumber}`);
+                            setIsTenantSearchOpen(false);
+                          }}
+                          className={`w-full justify-start px-3 py-2 text-left text-xs ${
+                            flat.id === selectedFlatId
+                              ? 'bg-brand-tint text-brand-tab-active'
+                              : 'text-slate-700 hover:bg-slate-100'
+                          }`}
+                        >
+                          <span>
+                            <strong>{flat.tenantName}</strong> · Flat #{flat.flatNumber}
+                            <span className="block text-[10px] font-normal text-slate-500">
+                              {building?.name} · {flat.tenantPhone || 'No phone'}
+                            </span>
+                          </span>
+                        </Button>
+                      );
+                    }) : (
+                      <p className="px-3 py-4 text-center text-xs text-slate-500">No active tenant or flat matches.</p>
+                    )}
+                  </div>
+                )}
+              </div>
               <span className="text-[10px] text-slate-400 mt-1 block">
                 Building: <strong className="text-slate-500">{activeBuilding?.name}</strong> · Entry month: <strong className="text-slate-500 font-mono">{targetMonth}</strong>
               </span>
@@ -305,12 +439,19 @@ export const AddRentModal: React.FC<AddRentModalProps> = ({
               <input
                 type="date"
                 value={paymentDate}
-                onChange={(e) => setPaymentDate(e.target.value)}
+                onChange={(e) => {
+                  const date = e.target.value;
+                  setPaymentDate(date);
+                  if (date.length >= 7) {
+                    setTargetMonth(date.slice(0, 7));
+                    setTenantSearch('');
+                  }
+                }}
                 className="w-full px-3 py-2.5 bg-slate-100 border border-slate-300 rounded-lg text-slate-950 font-mono focus:outline-none focus:border-sky-500"
                 required
               />
               <span className="text-[10px] text-slate-400 mt-1 block">
-                Date the payment was received
+                Select any past date to load tenants active in that month
               </span>
             </div>
 
@@ -577,7 +718,6 @@ export const AddRentModal: React.FC<AddRentModalProps> = ({
               </label>
               <span className="text-[10px] text-slate-400">PDF or image · max 1 MB</span>
             </div>
-
             {attachment ? (
               <div className="flex items-center justify-between rounded-lg border border-slate-300 bg-slate-100 p-3">
                 <div className="flex min-w-0 items-center gap-2.5">
@@ -588,30 +728,30 @@ export const AddRentModal: React.FC<AddRentModalProps> = ({
                       download={attachment.name}
                       target="_blank"
                       rel="noreferrer"
-                      className="block truncate text-xs font-semibold text-blue-700 hover:text-blue-700 hover:underline"
+                      className="block truncate text-xs font-semibold text-blue-700 hover:underline"
                     >
                       {attachment.name}
                     </a>
                     <p className="text-[10px] text-slate-400">{Math.ceil(attachment.size / 1024)} KB saved with this entry</p>
                   </div>
                 </div>
-                <button
+                <Button
                   type="button"
                   onClick={() => setAttachment(undefined)}
-                  className="rounded p-1.5 text-slate-500 hover:bg-slate-200 hover:text-rose-600"
+                  className="p-1.5 text-slate-500 hover:bg-slate-200 hover:text-rose-600"
                   title="Remove attachment"
                 >
                   <Trash2 className="h-3.5 w-3.5" />
-                </button>
+                </Button>
               </div>
             ) : (
-              <label className="flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-slate-300 bg-brand-surface px-4 py-4 text-xs font-medium text-slate-500 transition-colors hover:border-blue-500/50 hover:text-blue-700">
+              <label className="flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-slate-300 bg-brand-surface px-4 py-4 text-xs font-medium text-slate-500 hover:border-blue-500/50 hover:text-blue-700">
                 <Paperclip className="h-4 w-4" />
                 Choose receipt, bill, or supporting document
                 <input
                   type="file"
                   accept="image/*,.pdf"
-                  onChange={(e) => handleAttachment(e.target.files?.[0])}
+                  onChange={(event) => handleAttachment(event.target.files?.[0])}
                   className="hidden"
                 />
               </label>
